@@ -1,0 +1,11 @@
+oracledb>=2.4.0
+python-dotenv>=1.0.1
+PyYAML>=6.0.2
+pandas>=2.2.0
+numpy>=1.26.0
+requests>=2.32.0
+SQLAlchemy>=2.0.0
+gspread>=6.0.0
+gspread-dataframe>=3.3.1
+google-auth>=2.35.0
+google-api-python-client>=2.149.0

@@ -1,0 +1,8 @@
+project:
+  base_dir: "."
+
+paths:
+  input_mail_dir: "data/inbox/correos"
+  input_sheets_dir: "data/inbox/sheets"
+  temp_dir: "data/tmp"
+  logs_dir: "logs"

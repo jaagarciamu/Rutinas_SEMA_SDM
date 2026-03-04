@@ -1,0 +1,12 @@
+pipelines:
+  - id: "01_DETECCIONES_SEMA"
+    enabled: true
+    expected_times:
+      - "02:00"
+      - "14:00"
+    grace_minutes: 90
+
+  - id: "02_DETECCIONES_30MIN"
+    enabled: false
+    expected_times: []
+    grace_minutes: 60

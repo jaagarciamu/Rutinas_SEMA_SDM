@@ -1,0 +1,5 @@
+size_in_MB,id,name,creation,last_modification,type_of_file,date,mes,Estado,num
+"0,65",1GUapucyR7TlfP3h7P1482ETHz9hUHoDP,Detector-Measurement Point-Traffic Data - Processed-260302_260302.csv,2026-03-03T16:28:11.234Z,2026-03-03T05:15:33.741Z,text/csv,2026-03-02,2603,Pendiente,0
+"0,65",1xpZiFHD_qUiVGWprwFcxVWGDQBq5_YN2,Detector-Measurement Point-Traffic Data - Processed-260301_260301.csv,2026-03-03T16:29:24.182Z,2026-03-02T05:14:22.863Z,text/csv,2026-03-01,2603,Pendiente,0
+"0,65",1CQO38-1qdwKSzNkde6mLz3Agnv2SI-9Y,Detector-Measurement Point-Traffic Data - Processed-260228_260228.csv,2026-03-03T16:27:41.761Z,2026-03-01T05:14:47.455Z,text/csv,2026-02-28,2602,Pendiente,0
+"0,65",1eNC9YVhoAcxRH64kd3xWOtg2Q0JnCr1u,Detector-Measurement Point-Traffic Data - Processed-260227_260227.csv,2026-03-03T16:29:40.608Z,2026-02-28T05:16:13.097Z,text/csv,2026-02-27,2602,Pendiente,0

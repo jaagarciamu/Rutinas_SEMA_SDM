@@ -1,0 +1,14 @@
+pipelines:
+  - id: "01_DETECCIONES_SEMA"
+    script: "pipelines/01_DETECCIONES_SEMA.py"
+    interval_minutes: 720
+    offset_minutes: 120
+    enabled: true
+    args: []
+
+  - id: "02_DETECCIONES_30MIN"
+    script: "pipelines/02_DETECCIONES_30MIN.py"
+    interval_minutes: 30
+    offset_minutes: 27
+    enabled: true
+    args: []
