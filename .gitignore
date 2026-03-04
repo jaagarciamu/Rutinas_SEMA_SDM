@@ -4,3 +4,5 @@ __pycache__/
 logs/*.log
 *.pyc
 config/google-service-account.json
+data/tmp/*
+!data/tmp/.gitkeep
