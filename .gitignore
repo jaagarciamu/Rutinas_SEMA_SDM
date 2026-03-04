@@ -6,3 +6,5 @@ logs/*.log
 config/google-service-account.json
 data/tmp/*
 !data/tmp/.gitkeep
+logs/*
+!logs/.gitkeep
