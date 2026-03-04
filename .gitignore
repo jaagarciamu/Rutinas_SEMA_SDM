@@ -3,3 +3,4 @@ __pycache__/
 .env
 logs/*.log
 *.pyc
+config/google-service-account.json
