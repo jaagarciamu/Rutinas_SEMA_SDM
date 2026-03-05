@@ -4,6 +4,7 @@ import io
 import logging
 import os
 import re
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -18,6 +19,10 @@ from dotenv import load_dotenv
 from google.auth.transport.requests import Request
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+
+if __package__ is None or __package__ == "":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from pipelines.alerting import record_pipeline_failure, record_pipeline_success
 from sqlalchemy import inspect, text
 from sqlalchemy.dialects.oracle import FLOAT, NUMBER, TIMESTAMP, VARCHAR2
@@ -848,7 +853,11 @@ def main() -> None:
         data = []
 
     processed_updates = pd.merge(
-        select_data.copy(), num_reg[["id", "num"]], left_on="id", right_on="id", how="left"
+        select_data.drop(columns=["num"], errors="ignore").copy(),
+        num_reg[["id", "num"]],
+        left_on="id",
+        right_on="id",
+        how="left",
     )
     registro_n = apply_processed_updates(Registro, processed_updates)
     registro_n = filter_processable_registry_scope(registro_n)

@@ -6,6 +6,7 @@ import io
 import logging
 import os
 import smtplib
+import sys
 import traceback
 from datetime import datetime, timedelta
 from email.message import EmailMessage
@@ -19,6 +20,10 @@ from dotenv import load_dotenv
 from google.auth.transport.requests import Request
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+
+if __package__ is None or __package__ == "":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from pipelines.alerting import record_pipeline_failure, record_pipeline_success
 from sqlalchemy.dialects.oracle import FLOAT, NUMBER, TIMESTAMP, VARCHAR2
 from sqlalchemy.engine import create_engine
