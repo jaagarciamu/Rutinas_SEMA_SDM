@@ -9,6 +9,6 @@ pipelines:
   - id: "02_DETECCIONES_30MIN"
     script: "pipelines/02_DETECCIONES_30MIN.py"
     interval_minutes: 30
-    offset_minutes: 27
+    offset_minutes: 25
     enabled: true
     args: []
