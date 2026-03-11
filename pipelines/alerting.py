@@ -227,6 +227,7 @@ def check_and_alert_missed_runs(
             continue
         grace_minutes = int(pipeline_cfg.get("grace_minutes", 60))
         successes = _load_success_timestamps(pipeline_id)
+        latest_success = max(successes) if successes else None
 
         for hhmm in expected_times:
             try:
@@ -273,6 +274,35 @@ def check_and_alert_missed_runs(
                 details=f"slot={slot.isoformat()}",
                 source="monitor",
             )
+
+        max_silence_raw = pipeline_cfg.get("max_silence_minutes", "")
+        max_silence_minutes = 0
+        if str(max_silence_raw).strip():
+            try:
+                max_silence_minutes = int(max_silence_raw)
+            except Exception:
+                max_silence_minutes = 0
+
+        if max_silence_minutes > 0:
+            threshold = timedelta(minutes=max_silence_minutes)
+            is_silent = latest_success is None or (now - latest_success) > threshold
+            silence_key = f"{pipeline_id}|max_silence_active"
+
+            if is_silent:
+                if not state.get(silence_key, False):
+                    record_event(
+                        pipeline_id=pipeline_id,
+                        event_type="max_silence_exceeded",
+                        severity="error",
+                        message=(
+                            f"Pipeline sin ejecucion exitosa por mas de {max_silence_minutes} minutos"
+                        ),
+                        details=f"last_success={latest_success.isoformat() if latest_success else 'none'}",
+                        source="monitor",
+                    )
+                    state[silence_key] = True
+            else:
+                state[silence_key] = False
 
     _save_missed_state(state)
     return missed

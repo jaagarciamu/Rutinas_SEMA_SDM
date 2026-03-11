@@ -4,8 +4,8 @@ setlocal EnableExtensions EnableDelayedExpansion
 set "PROJECT_DIR=%~dp0"
 cd /d "%PROJECT_DIR%"
 
-if not exist "venv\Scripts\python.exe" (
-  echo [%date% %time%] ERROR: No existe venv\Scripts\python.exe>>"logs\task_scheduler.log"
+if not exist ".venv\Scripts\python.exe" (
+  echo [%date% %time%] ERROR: No existe .venv\Scripts\python.exe>>"logs\task_scheduler.log"
   exit /b 9009
 )
 
@@ -19,7 +19,7 @@ if errorlevel 1 (
 )
 
 echo [%date% %time%] START run_scheduler.py>>"logs\task_scheduler.log"
-"venv\Scripts\python.exe" -u "run_scheduler.py" >>"logs\task_scheduler.log" 2>&1
+".venv\Scripts\python.exe" -u "run_scheduler.py" >>"logs\task_scheduler.log" 2>&1
 set "RC=!ERRORLEVEL!"
 >>"logs\task_scheduler.log" echo [%date% %time%] END run_scheduler.py rc=!RC!
 

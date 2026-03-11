@@ -85,6 +85,44 @@ def should_run(now: datetime, interval_minutes: int, offset_minutes: int) -> boo
     return (minute_of_day - offset_minutes) % interval_minutes == 0
 
 
+def weekday_is_allowed(now: datetime, weekdays: list[Any] | None) -> bool:
+    if not weekdays:
+        return True
+
+    day_map = {
+        "monday": 0,
+        "tuesday": 1,
+        "wednesday": 2,
+        "thursday": 3,
+        "friday": 4,
+        "saturday": 5,
+        "sunday": 6,
+        "mon": 0,
+        "tue": 1,
+        "wed": 2,
+        "thu": 3,
+        "fri": 4,
+        "sat": 5,
+        "sun": 6,
+    }
+    allowed: set[int] = set()
+    for raw in weekdays:
+        if isinstance(raw, int) and 0 <= raw <= 6:
+            allowed.add(raw)
+            continue
+        value = str(raw).strip().lower()
+        if value in day_map:
+            allowed.add(day_map[value])
+            continue
+        if value.isdigit():
+            day = int(value)
+            if 0 <= day <= 6:
+                allowed.add(day)
+    if not allowed:
+        return True
+    return now.weekday() in allowed
+
+
 def execute_pipeline(
     logger: logging.Logger,
     pipeline_id: str,
@@ -218,8 +256,16 @@ def main() -> int:
 
         interval = int(pipeline.get("interval_minutes", 60))
         offset = int(pipeline.get("offset_minutes", 0))
+        weekdays = pipeline.get("weekdays", [])
+        if weekdays is not None and not isinstance(weekdays, list):
+            logger.error(
+                "weekdays debe ser una lista",
+                extra={"event": "invalid_weekdays", "pipeline": pipeline_id},
+            )
+            max_rc = max(max_rc, 1)
+            continue
 
-        if should_run(now, interval, offset):
+        if should_run(now, interval, offset) and weekday_is_allowed(now, weekdays):
             script = str(pipeline.get("script", ""))
             args = pipeline.get("args", [])
             if not isinstance(args, list):
@@ -240,6 +286,7 @@ def main() -> int:
                     "pipeline": pipeline_id,
                     "interval_minutes": interval,
                     "offset_minutes": offset,
+                    "weekdays": weekdays,
                 },
             )
 

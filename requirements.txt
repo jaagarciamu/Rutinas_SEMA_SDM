@@ -1,19 +1,19 @@
 # Configuracion y scheduler
-python-dotenv>=1.0.1
-PyYAML>=6.0.2
-packaging>=24.2
+python-dotenv>=1.2.2
+PyYAML>=6.0.3
+packaging>=26.0
 
 # Procesamiento de datos
-pandas>=2.2.0,<3.0.0
-numpy>=1.26.0
+pandas>=2.3.3,<3.0.0
+numpy>=2.4.3
 
 # Integraciones Google Workspace
-google-auth>=2.35.0
-google-api-python-client>=2.149.0
-gspread>=6.0.0
-gspread-dataframe>=3.3.1
-requests>=2.32.0
+google-auth>=2.49.0
+google-api-python-client>=2.192.0
+gspread>=6.2.1
+gspread-dataframe>=4.0.0
+requests>=2.32.5
 
 # Oracle
-oracledb>=2.4.0
-SQLAlchemy>=2.0.0
+oracledb>=3.4.2
+SQLAlchemy>=2.0.48

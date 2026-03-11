@@ -15,21 +15,47 @@ Más detalle técnico en `docs/arquitectura.md`.
 ## Instalación
 1. Crear entorno virtual:
    ```bash
-   python -m venv venv
+   python -m venv .venv
    ```
 2. Activar entorno:
    - Windows (PowerShell):
      ```powershell
-     .\venv\Scripts\Activate.ps1
+     .\.venv\Scripts\Activate.ps1
      ```
    - Linux/macOS:
      ```bash
-     source venv/bin/activate
+     source .venv/bin/activate
      ```
 3. Instalar dependencias:
    ```bash
    pip install -r requirements.txt
    ```
+4. (Opcional) Versiones exactas usadas en este proyecto:
+   ```bash
+   pip install -r requirements.lock.txt
+   ```
+
+## Autoactivacion del entorno (Bash)
+Para activar automaticamente `.venv` al entrar al directorio del proyecto, agrega este bloque en `~/.bashrc`:
+
+```bash
+# >>> auto-activate 00_RUTINAS_SEMA_SDM >>>
+_sema_project_dir="/home/jaagarciamu/TRABAJO/01_SEMAFOROS/00_RUTINAS_SEMA_SDM"
+_sema_auto_venv() {
+  if [[ "$PWD" == "$_sema_project_dir"* ]]; then
+    if [[ "$VIRTUAL_ENV" != "$_sema_project_dir/.venv" && -f "$_sema_project_dir/.venv/bin/activate" ]]; then
+      source "$_sema_project_dir/.venv/bin/activate"
+    fi
+  elif [[ "$VIRTUAL_ENV" == "$_sema_project_dir/.venv" ]]; then
+    deactivate >/dev/null 2>&1 || true
+  fi
+}
+case ";$PROMPT_COMMAND;" in
+  *";_sema_auto_venv;"*) ;;
+  *) PROMPT_COMMAND="_sema_auto_venv${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;;
+esac
+# <<< auto-activate 00_RUTINAS_SEMA_SDM <<<
+```
 
 ## Variables de Entorno
 1. Copiar `config/.env.example` a `config/.env`.

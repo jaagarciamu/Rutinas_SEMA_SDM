@@ -480,11 +480,29 @@ def main() -> None:
     processed_data = cleared_df[cleared_df["Estado"] == "Procesado"].copy()
     processed_data["date"] = pd.to_datetime(processed_data["date"])
     max_date = processed_data["date"].max()
+    max_staleness_days = int(os.getenv("DETECCIONES_SEMA_MAX_STALENESS_DAYS", "1"))
     if pd.notna(max_date):
         select_data = select_data[select_data["date"] > max_date]
 
     MESES = select_data["mes"].unique().tolist()
     ids = select_data["id"].tolist()
+
+    if pd.notna(max_date):
+        stale_days = (datetime.now().date() - max_date.date()).days
+        if stale_days > max_staleness_days:
+            if ids:
+                logger.warning(
+                    "Registros procesados desactualizados (%s dias sin cambio, ultimo=%s). "
+                    "Se detectaron %s archivos pendientes y se intentara recuperar.",
+                    stale_days,
+                    max_date.date(),
+                    len(ids),
+                )
+            else:
+                raise DataAvailabilityError(
+                    "Registros de detecciones sin actualizacion por "
+                    f"{stale_days} dias (ultimo procesado: {max_date.date()})"
+                )
 
     ids2 = []
     data = []

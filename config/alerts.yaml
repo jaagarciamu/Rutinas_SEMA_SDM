@@ -10,3 +10,27 @@ pipelines:
     enabled: false
     expected_times: []
     grace_minutes: 60
+
+  - id: "03_ESTADOS_SEMA_SUA"
+    enabled: true
+    expected_times: []
+    grace_minutes: 60
+    max_silence_minutes: 1440
+
+  - id: "04_PLANES_SEMA"
+    enabled: true
+    expected_times: []
+    grace_minutes: 60
+    max_silence_minutes: 1440
+
+  - id: "05_ANEXO_SEMA"
+    enabled: true
+    expected_times:
+      - "01:00"
+      - "13:00"
+    grace_minutes: 120
+
+  - id: "06_MANTENIMIENTO_SEMA"
+    enabled: false
+    expected_times: []
+    grace_minutes: 180

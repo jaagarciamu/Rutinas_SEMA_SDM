@@ -12,3 +12,32 @@ pipelines:
     offset_minutes: 25
     enabled: true
     args: []
+
+  - id: "03_ESTADOS_SEMA_SUA"
+    script: "pipelines/03_Estados_SEMA_SUA.py"
+    interval_minutes: 30
+    offset_minutes: 15
+    enabled: true
+    args: []
+
+  - id: "04_PLANES_SEMA"
+    script: "pipelines/04_PLANES_SEMA.py"
+    interval_minutes: 30
+    offset_minutes: 20
+    enabled: true
+    args: []
+
+  - id: "05_ANEXO_SEMA"
+    script: "pipelines/05_ANEXO_SEMA.py"
+    interval_minutes: 720
+    offset_minutes: 60
+    enabled: true
+    args: []
+
+  - id: "06_MANTENIMIENTO_SEMA"
+    script: "pipelines/06_MANTENIMIENTO_SEMA.py"
+    interval_minutes: 1440
+    offset_minutes: 180
+    weekdays: ["monday"]
+    enabled: true
+    args: []
