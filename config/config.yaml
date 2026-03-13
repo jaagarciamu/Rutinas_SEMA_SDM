@@ -1,6 +1,9 @@
 project:
   base_dir: "."
 
+scheduler:
+  tick_minutes: 5
+
 paths:
   input_mail_dir: "data/inbox/correos"
   input_sheets_dir: "data/inbox/sheets"

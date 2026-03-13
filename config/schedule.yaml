@@ -10,6 +10,8 @@ pipelines:
     script: "pipelines/02_DETECCIONES_30MIN.py"
     interval_minutes: 30
     offset_minutes: 25
+    start_time: "04:00"
+    end_time: "23:55"
     enabled: true
     args: []
 

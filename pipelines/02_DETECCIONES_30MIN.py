@@ -406,8 +406,16 @@ def main():
                 data.append(row_data)
 
         cleared_df = pd.DataFrame(data, columns = ['size_in_MB', 'id', 'name', 'creation','last_modification', 'type_of_file'])
-        cleared_df['date'] = cleared_df['name'].str.extract('([0-9]+)', expand=True).iloc[:,0]
-        cleared_df['date']= pd.to_datetime(cleared_df['date'], format='%y%m%d')
+        cleared_df["date_token"] = cleared_df["name"].str.extract(r"(?<!\d)(\d{6})(?!\d)", expand=True).iloc[:, 0]
+        cleared_df["date"] = pd.to_datetime(cleared_df["date_token"], format="%y%m%d", errors="coerce")
+        invalid_date_names = cleared_df[cleared_df["date"].isna()]["name"].tolist()
+        if invalid_date_names:
+            logger.warning(
+                "Se omitieron %s archivo(s) sin fecha yymmdd valida en el nombre: %s",
+                len(invalid_date_names),
+                invalid_date_names[:5],
+            )
+        cleared_df = cleared_df.dropna(subset=["date"]).drop(columns=["date_token"])
         cleared_df['mes'] = cleared_df['date'].dt.strftime("%y%m")
         cleared_df = cleared_df.sort_values(by=['date'], ascending=False)
         cleared_df = cleared_df[cleared_df['type_of_file'] == 'text/csv']
