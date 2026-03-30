@@ -13,6 +13,17 @@ from dotenv import load_dotenv
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
+if __package__ is None or __package__ == "":
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from pipelines.detecciones_file_rules import (
+    classify_drive_files,
+    extract_processable_date_token,
+    is_processable_name,
+    normalize_name_key,
+)
+
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_SCOPES = [
     "https://www.googleapis.com/auth/drive",
@@ -31,9 +42,6 @@ REQUIRED_COLUMNS = [
     "Estado",
     "num",
 ]
-DETECCIONES_NAME_PATTERN = (
-    r"Detektor-Messquerschnitt|Detector-Measurement Point-Traffic Data - Processed"
-)
 
 
 class ConfigurationError(RuntimeError):
@@ -115,7 +123,7 @@ def list_drive_files(drive_service, folder_id: str) -> pd.DataFrame:
             if row.get("mimeType") == "application/vnd.google-apps.folder":
                 continue
 
-            size_mb = round(int(row.get("size", 0)) / 100000000, 2)
+            size_mb = round(int(row.get("size", 0)) / 1_000_000, 2)
             data.append(
                 [
                     size_mb,
@@ -146,7 +154,7 @@ def list_drive_files(drive_service, folder_id: str) -> pd.DataFrame:
     if df.empty:
         return df
 
-    date_token = df["name"].str.extract(r"([0-9]{6})", expand=True).iloc[:, 0]
+    date_token = extract_processable_date_token(df["name"])
     df["date"] = pd.to_datetime(date_token, format="%y%m%d", errors="coerce")
     df["mes"] = df["date"].dt.strftime("%y%m")
     df["num"] = "0"
@@ -154,7 +162,7 @@ def list_drive_files(drive_service, folder_id: str) -> pd.DataFrame:
 
 
 def normalize_name(value: str) -> str:
-    return re.sub(r"\s+", " ", str(value).strip().lower())
+    return normalize_name_key(value)
 
 
 def ensure_required_columns(registro: pd.DataFrame) -> pd.DataFrame:
@@ -168,21 +176,23 @@ def ensure_required_columns(registro: pd.DataFrame) -> pd.DataFrame:
     return registro[ordered_columns]
 
 
+def filter_by_size_window(
+    df: pd.DataFrame,
+    min_size_mb: float,
+    max_size_mb: float,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    scoped = df.copy()
+    scoped["size_in_MB"] = pd.to_numeric(scoped["size_in_MB"], errors="coerce")
+    valid_mask = scoped["size_in_MB"].between(min_size_mb, max_size_mb, inclusive="both")
+    return scoped[valid_mask].copy(), scoped[~valid_mask].copy()
+
+
 def filter_processable_registry_scope(registro_df: pd.DataFrame) -> pd.DataFrame:
-    """Mantiene solo archivos que el pipeline 01 puede procesar."""
+    """Mantiene solo archivos canonicos relevantes para el pipeline 01."""
     df = ensure_required_columns(registro_df.copy())
-    df["name"] = df["name"].astype(str)
-    df["type_of_file"] = df["type_of_file"].astype(str)
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    df = df[
-        (df["type_of_file"] == "text/csv")
-        & df["name"].str.contains(
-            DETECCIONES_NAME_PATTERN,
-            case=False,
-            na=False,
-            regex=True,
-        )
-    ]
+    df["Estado"] = df["Estado"].astype(str)
+    df = df[df["Estado"].str.lower().isin({"pendiente", "procesado"})]
     return df.reset_index(drop=True)
 
 
@@ -220,6 +230,9 @@ def sort_registry_for_output(registro_df: pd.DataFrame) -> pd.DataFrame:
 
 def build_processable_pending_preview(
     registro: pd.DataFrame,
+    min_size_mb: float,
+    max_size_mb: float,
+    target_size_mb: float,
 ) -> tuple[pd.DataFrame, pd.Timestamp | None]:
     """Replica el criterio de selección de 01_DETECCIONES_SEMA.py."""
     df = ensure_required_columns(registro.copy())
@@ -228,22 +241,23 @@ def build_processable_pending_preview(
     df["type_of_file"] = df["type_of_file"].astype(str)
     df["Estado"] = df["Estado"].astype(str)
 
-    df = df[
-        (df["type_of_file"] == "text/csv")
-        & df["name"].str.contains(
-            DETECCIONES_NAME_PATTERN,
-            case=False,
-            na=False,
-            regex=True,
-        )
-    ]
-
     pending = df[df["Estado"].str.lower() == "pendiente"].copy()
     processed = df[df["Estado"].str.lower() == "procesado"].copy()
 
     max_processed_date = processed["date"].max()
     if pd.notna(max_processed_date):
         pending = pending[pending["date"] > max_processed_date]
+
+    pending, _ = filter_by_size_window(pending, min_size_mb=min_size_mb, max_size_mb=max_size_mb)
+    if not pending.empty:
+        pending["size_gap_mb"] = (
+            pd.to_numeric(pending["size_in_MB"], errors="coerce") - target_size_mb
+        ).abs()
+        pending = pending.sort_values(
+            by=["date", "size_gap_mb", "last_modification"],
+            ascending=[False, True, False],
+            na_position="last",
+        ).drop(columns=["size_gap_mb"])
 
     pending = pending[REQUIRED_COLUMNS].sort_values(
         by="date", ascending=False, na_position="last"
@@ -254,90 +268,50 @@ def build_processable_pending_preview(
 def sync_registry(
     registro: pd.DataFrame, drive_df: pd.DataFrame
 ) -> tuple[pd.DataFrame, SyncStats, pd.DataFrame]:
-    drive_df = drive_df.copy()
-    drive_df["name"] = drive_df["name"].astype(str)
-    drive_df["type_of_file"] = drive_df["type_of_file"].astype(str)
-    drive_df = drive_df[
-        (drive_df["type_of_file"] == "text/csv")
-        & drive_df["name"].str.contains(
-            DETECCIONES_NAME_PATTERN,
-            case=False,
-            na=False,
-            regex=True,
-        )
-    ].copy()
-
-    stats = SyncStats(total_drive_files=len(drive_df))
-    registro = dedupe_registry_by_name(filter_processable_registry_scope(registro))
+    min_size_mb = float(os.getenv("DETECCIONES_SEMA_MIN_SIZE_MB", "50"))
+    max_size_mb = float(os.getenv("DETECCIONES_SEMA_MAX_SIZE_MB", "100"))
+    target_size_mb = float(os.getenv("DETECCIONES_SEMA_TARGET_SIZE_MB", "67"))
+    previous_registry = ensure_required_columns(registro.copy())
+    classified_df = classify_drive_files(
+        ensure_required_columns(drive_df.copy()),
+        min_size_mb=min_size_mb,
+        max_size_mb=max_size_mb,
+        target_size_mb=target_size_mb,
+        existing_registry=previous_registry,
+    )
+    stats = SyncStats(total_drive_files=len(classified_df))
     id_changes: list[dict[str, object]] = []
+    previous_registry["_name_key"] = previous_registry["name"].astype(str).map(normalize_name)
+    classified_df["_name_key"] = classified_df["name"].astype(str).map(normalize_name)
+    prev_ids = previous_registry.set_index("_name_key")["id"] if not previous_registry.empty else pd.Series(dtype="object")
+    existing_keys = set(previous_registry["_name_key"]) if not previous_registry.empty else set()
 
-    if registro.empty:
-        registro = pd.DataFrame(columns=REQUIRED_COLUMNS)
-
-    registro["_name_key"] = registro["name"].map(normalize_name)
-    drive_df = drive_df.copy()
-    drive_df["_name_key"] = drive_df["name"].map(normalize_name)
-
-    name_to_index: dict[str, int] = {}
-    for idx, key in registro["_name_key"].items():
-        if key and key not in name_to_index:
-            name_to_index[key] = idx
-
-    for _, drive_row in drive_df.iterrows():
-        key = drive_row["_name_key"]
-        if not key:
-            continue
-
-        existing_idx = name_to_index.get(key)
-        if existing_idx is not None:
-            old_id = str(registro.at[existing_idx, "id"])
-            new_id = str(drive_row["id"])
-
-            if old_id != new_id:
+    for _, row in classified_df.iterrows():
+        row_key = row["_name_key"]
+        if row_key in existing_keys:
+            old_id = str(prev_ids.get(row_key, ""))
+            new_id = str(row["id"])
+            if old_id and old_id != new_id:
+                stats.updated_ids += 1
                 id_changes.append(
                     {
-                        "name": drive_row["name"],
+                        "name": row["name"],
                         "id_old": old_id,
                         "id_new": new_id,
-                        "date": drive_row.get("date"),
-                        "mes": drive_row.get("mes"),
-                        "estado_actual": registro.at[existing_idx, "Estado"],
+                        "date": row["date"],
+                        "mes": row["mes"],
+                        "estado_actual": row["Estado"],
                     }
                 )
-                registro.at[existing_idx, "id"] = new_id
-                registro.at[existing_idx, "size_in_MB"] = drive_row["size_in_MB"]
-                registro.at[existing_idx, "creation"] = drive_row["creation"]
-                registro.at[existing_idx, "last_modification"] = drive_row["last_modification"]
-                registro.at[existing_idx, "type_of_file"] = drive_row["type_of_file"]
-                if pd.notna(drive_row.get("date")):
-                    registro.at[existing_idx, "date"] = drive_row["date"]
-                if pd.notna(drive_row.get("mes")):
-                    registro.at[existing_idx, "mes"] = drive_row["mes"]
-                stats.updated_ids += 1
             else:
                 stats.unchanged_rows += 1
-            continue
+        elif str(row["Estado"]).lower() == "pendiente":
+            stats.new_pending_rows += 1
 
-        new_row = {
-            "size_in_MB": drive_row["size_in_MB"],
-            "id": drive_row["id"],
-            "name": drive_row["name"],
-            "creation": drive_row["creation"],
-            "last_modification": drive_row["last_modification"],
-            "type_of_file": drive_row["type_of_file"],
-            "date": drive_row.get("date"),
-            "mes": drive_row.get("mes"),
-            "Estado": "Pendiente",
-            "num": "0",
-        }
-        registro = pd.concat([registro, pd.DataFrame([new_row])], ignore_index=True)
-        name_to_index[key] = len(registro) - 1
-        stats.new_pending_rows += 1
-
-    registro = registro.drop(columns=["_name_key"], errors="ignore")
-
-    registro = sort_registry_for_output(registro)
-    registro = dedupe_registry_by_name(registro)
+    registro = classified_df.drop(columns=["_name_key"], errors="ignore")
+    registro["num"] = registro.get("num", "0")
+    registro["num"] = registro["num"].fillna("0").astype(str)
+    registro = ensure_required_columns(registro)
     registro = sort_registry_for_output(registro)
 
     id_changes_df = pd.DataFrame(
@@ -389,6 +363,24 @@ def main() -> int:
             "Ruta opcional para exportar SOLO filas pendientes con 10 campos "
             "(ej. data/tmp/pendientes_preview.csv)."
         ),
+    )
+    parser.add_argument(
+        "--min-size-mb",
+        type=float,
+        default=50.0,
+        help="Tamano minimo en MB para considerar un archivo pendiente procesable. Default: 50.",
+    )
+    parser.add_argument(
+        "--max-size-mb",
+        type=float,
+        default=100.0,
+        help="Tamano maximo en MB para considerar un archivo pendiente procesable. Default: 100.",
+    )
+    parser.add_argument(
+        "--target-size-mb",
+        type=float,
+        default=67.0,
+        help="Tamano objetivo en MB para ordenar primero los archivos mas cercanos al valor esperado. Default: 67.",
     )
     parser.add_argument(
         "--show-id-changes",
@@ -457,13 +449,50 @@ def main() -> int:
         id_changes_df.to_csv(id_changes_path, index=False)
         print(f"Cambios de ID exportados en: {id_changes_path}")
 
-    pending_df, cutoff_date = build_processable_pending_preview(merged_df)
+    _, cutoff_date = build_processable_pending_preview(
+        merged_df,
+        min_size_mb=args.min_size_mb,
+        max_size_mb=args.max_size_mb,
+        target_size_mb=args.target_size_mb,
+    )
+    pending_candidates = ensure_required_columns(merged_df.copy())
+    pending_candidates["date"] = pd.to_datetime(pending_candidates["date"], errors="coerce")
+    pending_candidates["Estado"] = pending_candidates["Estado"].astype(str)
+    pending_candidates = pending_candidates[
+        pending_candidates["Estado"].str.lower() == "pendiente"
+    ].copy()
+    if pd.notna(cutoff_date):
+        pending_candidates = pending_candidates[pending_candidates["date"] > cutoff_date]
+    pending_df, excluded_by_size_df = filter_by_size_window(
+        pending_candidates,
+        min_size_mb=args.min_size_mb,
+        max_size_mb=args.max_size_mb,
+    )
+    if not pending_df.empty:
+        pending_df["size_gap_mb"] = (
+            pd.to_numeric(pending_df["size_in_MB"], errors="coerce") - args.target_size_mb
+        ).abs()
+        pending_df = pending_df.sort_values(
+            by=["date", "size_gap_mb", "last_modification"],
+            ascending=[False, True, False],
+            na_position="last",
+        ).drop(columns=["size_gap_mb"])
+    pending_df = pending_df[REQUIRED_COLUMNS].sort_values(
+        by="date", ascending=False, na_position="last"
+    )
+    excluded_by_size_df = excluded_by_size_df[REQUIRED_COLUMNS].sort_values(
+        by="date", ascending=False, na_position="last"
+    )
 
     if args.show_pending > 0:
         print("\n=== Pendientes (10 campos) ===")
         print(
             "Fecha corte (max date en Procesado): "
             + (cutoff_date.isoformat() if pd.notna(cutoff_date) else "None")
+        )
+        print(
+            f"Filtro tamano aplicado: {args.min_size_mb} MB a {args.max_size_mb} MB "
+            f"(objetivo {args.target_size_mb} MB)"
         )
         if pending_df.empty:
             print("No hay registros en estado Pendiente.")
@@ -474,6 +503,11 @@ def main() -> int:
                 f"{pending_df['date'].min()} -> {pending_df['date'].max()}"
             )
             print(pending_df.head(args.show_pending).to_string(index=False))
+        if not excluded_by_size_df.empty:
+            print(
+                f"Pendientes excluidos por tamano fuera de rango: {len(excluded_by_size_df)}"
+            )
+            print(excluded_by_size_df.head(args.show_pending).to_string(index=False))
 
     if args.pending_csv:
         pending_path = (ROOT_DIR / args.pending_csv).resolve()

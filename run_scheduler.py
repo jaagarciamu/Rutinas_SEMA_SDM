@@ -7,12 +7,13 @@ import logging
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import yaml
 from dotenv import load_dotenv
+from config.colombia_holidays import colombian_holidays
 from pipelines.alerting import (
     check_and_alert_missed_runs,
     record_pipeline_failure,
@@ -222,6 +223,15 @@ def weekday_is_allowed(now: datetime, weekdays: list[Any] | None) -> bool:
     return now.weekday() in allowed
 
 
+def previous_day_is_holiday(now: datetime) -> bool:
+    previous_day = (now - timedelta(days=1)).date()
+    candidate_years = {previous_day.year, now.year}
+    holiday_dates: set = set()
+    for year in candidate_years:
+        holiday_dates.update(colombian_holidays(year))
+    return previous_day in holiday_dates
+
+
 def execute_pipeline(
     logger: logging.Logger,
     pipeline_id: str,
@@ -364,6 +374,7 @@ def main() -> int:
         interval = int(pipeline.get("interval_minutes", 60))
         offset = int(pipeline.get("offset_minutes", 0))
         weekdays = pipeline.get("weekdays", [])
+        run_if_previous_day_holiday = bool(pipeline.get("run_if_previous_day_holiday", False))
         start_time = pipeline.get("start_time")
         end_time = pipeline.get("end_time")
         if weekdays is not None and not isinstance(weekdays, list):
@@ -374,9 +385,13 @@ def main() -> int:
             max_rc = max(max_rc, 1)
             continue
 
+        day_allowed = weekday_is_allowed(now, weekdays)
+        if run_if_previous_day_holiday and previous_day_is_holiday(now):
+            day_allowed = True
+
         if (
             should_run(now, interval, offset)
-            and weekday_is_allowed(now, weekdays)
+            and day_allowed
             and time_window_is_allowed(now, start_time, end_time)
         ):
             script = str(pipeline.get("script", ""))
@@ -400,6 +415,7 @@ def main() -> int:
                     "interval_minutes": interval,
                     "offset_minutes": offset,
                     "weekdays": weekdays,
+                    "run_if_previous_day_holiday": run_if_previous_day_holiday,
                     "start_time": start_time,
                     "end_time": end_time,
                 },

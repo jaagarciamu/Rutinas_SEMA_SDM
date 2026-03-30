@@ -9,7 +9,7 @@ pipelines:
   - id: "02_DETECCIONES_30MIN"
     script: "pipelines/02_DETECCIONES_30MIN.py"
     interval_minutes: 30
-    offset_minutes: 25
+    offset_minutes: 20
     start_time: "04:00"
     end_time: "23:55"
     enabled: true
@@ -25,7 +25,7 @@ pipelines:
   - id: "04_PLANES_SEMA"
     script: "pipelines/04_PLANES_SEMA.py"
     interval_minutes: 30
-    offset_minutes: 20
+    offset_minutes: 10
     enabled: true
     args: []
 
@@ -41,5 +41,16 @@ pipelines:
     interval_minutes: 1440
     offset_minutes: 180
     weekdays: ["monday"]
+    enabled: true
+    args: []
+
+  - id: "08_FIN_SEM_SEMA"
+    script: "pipelines/08_FIN_SEM_SEMA.py"
+    interval_minutes: 60
+    offset_minutes: 55
+    weekdays: ["friday", "saturday", "sunday", "monday"]
+    run_if_previous_day_holiday: true
+    start_time: "06:55"
+    end_time: "20:55"
     enabled: true
     args: []

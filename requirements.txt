@@ -6,6 +6,7 @@ packaging>=26.0
 # Procesamiento de datos
 pandas>=2.3.3,<3.0.0
 numpy>=2.4.3
+scipy>=1.14.0
 
 # Integraciones Google Workspace
 google-auth>=2.49.0

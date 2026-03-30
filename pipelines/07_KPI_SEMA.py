@@ -58,6 +58,15 @@ def require_env(name: str) -> str:
     return value
 
 
+def load_kpi_settings() -> tuple[str, str, str, str]:
+    return (
+        require_env("KPI_SHEET_URL"),
+        require_env("KPI_WORKSHEET"),
+        require_env("KPI_DATA_RANGE"),
+        require_env("KPI_ORACLE_TABLE"),
+    )
+
+
 def parse_scopes(raw_scopes: str | None) -> list[str]:
     if not raw_scopes:
         return DEFAULT_SCOPES
@@ -187,10 +196,7 @@ def main() -> None:
     gspread_client = build_google_client(scopes)
     engine = build_oracle_engine()
 
-    sheet_url = require_env("KPI_SHEET_URL")
-    worksheet_name = os.getenv("KPI_WORKSHEET", "KPI ACTUAL").strip() or "KPI ACTUAL"
-    data_range = os.getenv("KPI_DATA_RANGE", "A1:N10000").strip() or "A1:N10000"
-    oracle_table = os.getenv("KPI_ORACLE_TABLE", "disp_kpi_sema").strip() or "disp_kpi_sema"
+    sheet_url, worksheet_name, data_range, oracle_table = load_kpi_settings()
 
     raw_df = load_kpi_sheet(gspread_client, sheet_url, worksheet_name, data_range)
     if raw_df.empty:

@@ -62,6 +62,34 @@ def _get_sheet_client() -> tuple[gspread.Client, str, str] | None:
     return client, sheet_url, worksheet_name
 
 
+def _sort_sheet_events(df: pd.DataFrame) -> pd.DataFrame:
+    sorted_df = df.copy()
+    if "timestamp" not in sorted_df.columns:
+        return sorted_df.reset_index(drop=True)
+
+    sorted_df["_timestamp_sort"] = pd.to_datetime(sorted_df["timestamp"], errors="coerce")
+    if "pipeline_id" in sorted_df.columns:
+        sorted_df["pipeline_id"] = sorted_df["pipeline_id"].astype(str)
+    if "event_type" in sorted_df.columns:
+        sorted_df["event_type"] = sorted_df["event_type"].astype(str)
+
+    order_columns = ["_timestamp_sort"]
+    ascending = [False]
+    if "pipeline_id" in sorted_df.columns:
+        order_columns.append("pipeline_id")
+        ascending.append(True)
+    if "event_type" in sorted_df.columns:
+        order_columns.append("event_type")
+        ascending.append(True)
+
+    sorted_df = sorted_df.sort_values(
+        by=order_columns,
+        ascending=ascending,
+        na_position="last",
+    )
+    return sorted_df.drop(columns=["_timestamp_sort"], errors="ignore").reset_index(drop=True)
+
+
 def _append_event_to_sheet(event: dict[str, Any]) -> None:
     try:
         sheet_cfg = _get_sheet_client()
@@ -73,13 +101,14 @@ def _append_event_to_sheet(event: dict[str, Any]) -> None:
 
         raw = worksheet.get_all_values()
         if not raw:
-            gd.set_with_dataframe(worksheet=worksheet, dataframe=df)
+            gd.set_with_dataframe(worksheet=worksheet, dataframe=_sort_sheet_events(df))
             return
 
         existing_df = pd.DataFrame.from_records(raw)
         existing_df.columns = existing_df.iloc[0]
         existing_df = existing_df.drop(existing_df.index[0]).reset_index(drop=True)
         merged = pd.concat([existing_df, df], ignore_index=True)
+        merged = _sort_sheet_events(merged)
         worksheet.clear()
         gd.set_with_dataframe(worksheet=worksheet, dataframe=merged)
     except Exception:

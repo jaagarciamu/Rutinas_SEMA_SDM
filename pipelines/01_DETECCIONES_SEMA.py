@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import io
 import logging
@@ -24,6 +24,12 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipelines.alerting import record_pipeline_failure, record_pipeline_success
+from pipelines.detecciones_file_rules import (
+    classify_drive_files,
+    extract_processable_date_token as rules_extract_processable_date_token,
+    is_processable_name as rules_is_processable_name,
+    normalize_name_key as rules_normalize_name_key,
+)
 from sqlalchemy import inspect, text
 from sqlalchemy.dialects.oracle import FLOAT, NUMBER, TIMESTAMP, VARCHAR2
 from sqlalchemy.engine import create_engine
@@ -49,20 +55,17 @@ REQUIRED_COLUMNS = [
     "Estado",
     "num",
 ]
-DETECCIONES_NAME_PATTERN = (
-    r"Detektor-Messquerschnitt|Detector-Measurement Point-Traffic Data - Processed"
-)
 ORACLE_FLOAT = FLOAT(binary_precision=126)
 
 logger = logging.getLogger("detecciones_sema")
 
 
 class ConfigurationError(RuntimeError):
-    """Error funcional para variables de entorno faltantes o inválidas."""
+    """Error funcional para variables de entorno faltantes o invÃ¡lidas."""
 
 
 class DataAvailabilityError(RuntimeError):
-    """Error de negocio cuando no existe data mínima esperada."""
+    """Error de negocio cuando no existe data mÃ­nima esperada."""
 
 
 @dataclass
@@ -97,7 +100,7 @@ def parse_scopes(raw_scopes: str | None) -> list[str]:
 
 
 def load_environment() -> None:
-    """Carga variables desde config/.env y luego .env en raíz (si existe)."""
+    """Carga variables desde config/.env y luego .env en raÃ­z (si existe)."""
     load_dotenv(ROOT_DIR / "config" / ".env")
     load_dotenv(ROOT_DIR / ".env")
 
@@ -136,6 +139,28 @@ def safe_to_float(series):
     )
 
 
+def get_size_rules() -> tuple[float, float, float]:
+    min_size_mb = float(os.getenv("DETECCIONES_SEMA_MIN_SIZE_MB", "50"))
+    max_size_mb = float(os.getenv("DETECCIONES_SEMA_MAX_SIZE_MB", "100"))
+    target_size_mb = float(os.getenv("DETECCIONES_SEMA_TARGET_SIZE_MB", "67"))
+    return min_size_mb, max_size_mb, target_size_mb
+
+
+def filter_pending_by_size(
+    df: pd.DataFrame,
+    min_size_mb: float,
+    max_size_mb: float,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    scoped = df.copy()
+    scoped["size_in_MB"] = pd.to_numeric(scoped["size_in_MB"], errors="coerce")
+    valid_mask = scoped["size_in_MB"].between(min_size_mb, max_size_mb, inclusive="both")
+    return scoped[valid_mask].copy(), scoped[~valid_mask].copy()
+
+
+def get_to_sql_chunksize() -> int:
+    return int(os.getenv("DETECCIONES_SEMA_TO_SQL_CHUNKSIZE", "5000"))
+
+
 def ensure_required_columns(registro: pd.DataFrame) -> pd.DataFrame:
     for column in REQUIRED_COLUMNS:
         if column not in registro.columns:
@@ -147,24 +172,23 @@ def ensure_required_columns(registro: pd.DataFrame) -> pd.DataFrame:
 
 
 def normalize_name(value: str) -> str:
-    return re.sub(r"\s+", " ", str(value).strip().lower())
+    return rules_normalize_name_key(value)
+
+
+def is_processable_detecciones_name(series: pd.Series) -> pd.Series:
+    return rules_is_processable_name(series)
+
+
+def extract_processable_date_token(series: pd.Series) -> pd.Series:
+    return rules_extract_processable_date_token(series)
 
 
 def filter_processable_registry_scope(registro_df: pd.DataFrame) -> pd.DataFrame:
-    """Mantiene solo archivos que este pipeline puede procesar."""
+    """Mantiene solo archivos canonicos relevantes para el pipeline."""
     df = ensure_required_columns(registro_df.copy())
-    df["name"] = df["name"].astype(str)
-    df["type_of_file"] = df["type_of_file"].astype(str)
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    df = df[
-        (df["type_of_file"] == "text/csv")
-        & df["name"].str.contains(
-            DETECCIONES_NAME_PATTERN,
-            case=False,
-            na=False,
-            regex=True,
-        )
-    ]
+    df["Estado"] = df["Estado"].astype(str)
+    df = df[df["Estado"].str.lower().isin({"pendiente", "procesado"})]
     return df.reset_index(drop=True)
 
 
@@ -245,7 +269,7 @@ def list_drive_files(drive_service, folder_id: str) -> pd.DataFrame:
                 continue
             data.append(
                 [
-                    round(int(row.get("size", 0)) / 100000000, 2),
+                    round(int(row.get("size", 0)) / 1_000_000, 2),
                     str(row.get("id", "")),
                     str(row.get("name", "")),
                     str(row.get("createdTime", "")),
@@ -276,7 +300,7 @@ def list_drive_files(drive_service, folder_id: str) -> pd.DataFrame:
         drive_df["num"] = pd.Series(dtype="object")
         return drive_df
 
-    date_token = drive_df["name"].str.extract(r"([0-9]{6})", expand=True).iloc[:, 0]
+    date_token = extract_processable_date_token(drive_df["name"])
     drive_df["date"] = pd.to_datetime(date_token, format="%y%m%d", errors="coerce")
     drive_df["mes"] = drive_df["date"].dt.strftime("%y%m")
     drive_df["num"] = "0"
@@ -284,79 +308,51 @@ def list_drive_files(drive_service, folder_id: str) -> pd.DataFrame:
 
 
 def sync_registry_by_name(registro_df: pd.DataFrame, drive_df: pd.DataFrame) -> tuple[pd.DataFrame, SyncStats]:
-    drive_df = drive_df.copy()
-    drive_df["name"] = drive_df["name"].astype(str)
-    drive_df["type_of_file"] = drive_df["type_of_file"].astype(str)
-    drive_df = drive_df[
-        (drive_df["type_of_file"] == "text/csv")
-        & drive_df["name"].str.contains(
-            DETECCIONES_NAME_PATTERN,
-            case=False,
-            na=False,
-            regex=True,
-        )
-    ].copy()
+    min_size_mb, max_size_mb, target_size_mb = get_size_rules()
+    previous_registry = ensure_required_columns(registro_df.copy())
+    classified_df = classify_drive_files(
+        ensure_required_columns(drive_df.copy()),
+        min_size_mb=min_size_mb,
+        max_size_mb=max_size_mb,
+        target_size_mb=target_size_mb,
+        existing_registry=previous_registry,
+    )
+    classified_df["num"] = classified_df.get("num", "0")
+    classified_df["num"] = classified_df["num"].fillna("0").astype(str)
 
-    stats = SyncStats(total_drive_files=len(drive_df))
-    registro_df = dedupe_registry_by_name(filter_processable_registry_scope(registro_df))
+    previous_registry["_name_key"] = previous_registry["name"].astype(str).map(normalize_name)
+    classified_df["_name_key"] = classified_df["name"].astype(str).map(normalize_name)
+    prev_ids = previous_registry.set_index("_name_key")["id"] if not previous_registry.empty else pd.Series(dtype="object")
+    current_keys = set(classified_df["_name_key"])
+    existing_keys = set(previous_registry["_name_key"]) if not previous_registry.empty else set()
 
-    if registro_df.empty:
-        registro_df = pd.DataFrame(columns=REQUIRED_COLUMNS)
-
-    registro_df["_name_key"] = registro_df["name"].map(normalize_name)
-    drive_df = drive_df.copy()
-    drive_df["_name_key"] = drive_df["name"].map(normalize_name)
-
-    name_to_index: dict[str, int] = {}
-    for idx, key in registro_df["_name_key"].items():
-        if key and key not in name_to_index:
-            name_to_index[key] = idx
-
-    for _, drive_row in drive_df.iterrows():
-        key = drive_row["_name_key"]
-        if not key:
-            continue
-
-        existing_idx = name_to_index.get(key)
-        if existing_idx is not None:
-            old_id = str(registro_df.at[existing_idx, "id"])
-            new_id = str(drive_row["id"])
-            if old_id != new_id:
-                registro_df.at[existing_idx, "id"] = new_id
-                registro_df.at[existing_idx, "size_in_MB"] = drive_row["size_in_MB"]
-                registro_df.at[existing_idx, "creation"] = drive_row["creation"]
-                registro_df.at[existing_idx, "last_modification"] = drive_row["last_modification"]
-                registro_df.at[existing_idx, "type_of_file"] = drive_row["type_of_file"]
-                if pd.notna(drive_row.get("date")):
-                    registro_df.at[existing_idx, "date"] = drive_row["date"]
-                if pd.notna(drive_row.get("mes")):
-                    registro_df.at[existing_idx, "mes"] = drive_row["mes"]
-                stats.updated_ids += 1
+    updated_ids = 0
+    unchanged_rows = 0
+    for _, row in classified_df.iterrows():
+        row_key = row["_name_key"]
+        old_id = str(prev_ids.get(row_key, ""))
+        new_id = str(row["id"])
+        if row_key in existing_keys:
+            if old_id and old_id != new_id:
+                updated_ids += 1
             else:
-                stats.unchanged_rows += 1
-            continue
+                unchanged_rows += 1
 
-        new_row = {
-            "size_in_MB": drive_row["size_in_MB"],
-            "id": drive_row["id"],
-            "name": drive_row["name"],
-            "creation": drive_row["creation"],
-            "last_modification": drive_row["last_modification"],
-            "type_of_file": drive_row["type_of_file"],
-            "date": drive_row.get("date"),
-            "mes": drive_row.get("mes"),
-            "Estado": "Pendiente",
-            "num": "0",
-        }
-        registro_df = pd.concat([registro_df, pd.DataFrame([new_row])], ignore_index=True)
-        name_to_index[key] = len(registro_df) - 1
-        stats.new_pending_rows += 1
+    stats = SyncStats(
+        total_drive_files=len(classified_df),
+        updated_ids=updated_ids,
+        new_pending_rows=sum(
+            1
+            for _, row in classified_df.iterrows()
+            if row["_name_key"] not in existing_keys and str(row["Estado"]).lower() == "pendiente"
+        ),
+        unchanged_rows=unchanged_rows,
+    )
 
-    registro_df = registro_df.drop(columns=["_name_key"], errors="ignore")
-    registro_df = sort_registry_for_output(registro_df)
-    registro_df = dedupe_registry_by_name(registro_df)
-    registro_df = sort_registry_for_output(registro_df)
-    return registro_df.reset_index(drop=True), stats
+    classified_df = classified_df.drop(columns=["_name_key"], errors="ignore")
+    classified_df = ensure_required_columns(classified_df)
+    classified_df = sort_registry_for_output(classified_df)
+    return classified_df.reset_index(drop=True), stats
 
 
 def build_processable_pending_preview(registro_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Timestamp | None]:
@@ -427,7 +423,7 @@ def main() -> None:
     registro_sheet = load_registry_sheet(gspread_client, sheet_url, sheet_tab)
     drive_df = list_drive_files(drive_service, drive_folder_id)
     Registro, sync_stats = sync_registry_by_name(registro_sheet, drive_df)
-    Registro = dedupe_registry_by_name(filter_processable_registry_scope(Registro))
+    Registro = dedupe_registry_by_name(Registro)
 
     if sync_stats.updated_ids > 0 or sync_stats.new_pending_rows > 0:
         write_registry_sheet(gspread_client, sheet_url, sheet_tab, Registro)
@@ -452,28 +448,15 @@ def main() -> None:
         len(processable_pending),
         cutoff_date.isoformat() if pd.notna(cutoff_date) else "None",
     )
+    min_size_mb, max_size_mb, target_size_mb = get_size_rules()
 
     cleared_df = drive_df.copy()
     cleared_df = cleared_df.sort_values(by=["date"], ascending=False)
     cleared_df = cleared_df[cleared_df["type_of_file"] == "text/csv"]
-    cleared_df = cleared_df[
-        cleared_df["name"].str.contains(
-            DETECCIONES_NAME_PATTERN,
-            case=False,
-            na=False,
-            regex=True,
-        )
-    ]
+    cleared_df = cleared_df[is_processable_detecciones_name(cleared_df["name"])]
     cleared_df = pd.merge(
         cleared_df, Registro[["id", "Estado"]], left_on="id", right_on="id", how="left"
     ).fillna("Pendiente")
-
-    yesterday_date = (datetime.now() - timedelta(days=1)).date()
-    has_yesterday = (cleared_df["date"].dt.date == yesterday_date).any()
-    if not has_yesterday:
-        raise DataAvailabilityError(
-            f"No se encontró archivo de detecciones del día anterior ({yesterday_date})"
-        )
 
     select_data = cleared_df[cleared_df["Estado"] == "Pendiente"]
 
@@ -483,6 +466,28 @@ def main() -> None:
     max_staleness_days = int(os.getenv("DETECCIONES_SEMA_MAX_STALENESS_DAYS", "1"))
     if pd.notna(max_date):
         select_data = select_data[select_data["date"] > max_date]
+
+    select_data, excluded_by_size = filter_pending_by_size(
+        select_data,
+        min_size_mb=min_size_mb,
+        max_size_mb=max_size_mb,
+    )
+    if not excluded_by_size.empty:
+        logger.warning(
+            "Se excluyeron %s pendientes por tamano fuera de rango (%s MB a %s MB).",
+            len(excluded_by_size),
+            min_size_mb,
+            max_size_mb,
+        )
+    if not select_data.empty:
+        select_data["size_gap_mb"] = (
+            pd.to_numeric(select_data["size_in_MB"], errors="coerce") - target_size_mb
+        ).abs()
+        select_data = select_data.sort_values(
+            by=["date", "size_gap_mb", "last_modification"],
+            ascending=[False, True, False],
+            na_position="last",
+        ).drop(columns=["size_gap_mb"])
 
     MESES = select_data["mes"].unique().tolist()
     ids = select_data["id"].tolist()
@@ -498,6 +503,13 @@ def main() -> None:
                     max_date.date(),
                     len(ids),
                 )
+            elif not excluded_by_size.empty:
+                raise DataAvailabilityError(
+                    "No hay pendientes dentro de la ventana de tamano configurada "
+                    f"({min_size_mb} MB a {max_size_mb} MB). "
+                    f"Se excluyeron {len(excluded_by_size)} archivos posteriores al ultimo Procesado "
+                    f"({max_date.date()})."
+                )
             else:
                 raise DataAvailabilityError(
                     "Registros de detecciones sin actualizacion por "
@@ -505,8 +517,7 @@ def main() -> None:
                 )
 
     ids2 = []
-    data = []
-    registros_count = []
+    processed_counts = []
 
     numeric_cols = [
         "processed_all_vol",
@@ -521,12 +532,21 @@ def main() -> None:
     ]
 
     if not ids:
+        if not excluded_by_size.empty:
+            raise DataAvailabilityError(
+                "No hay pendientes dentro de la ventana de tamano configurada "
+                f"({min_size_mb} MB a {max_size_mb} MB). "
+                f"Se excluyeron {len(excluded_by_size)} archivos posteriores al ultimo Procesado."
+            )
         logger.info("No hay registros nuevos")
         return
 
     engine = build_oracle_engine()
+    to_sql_chunksize = get_to_sql_chunksize()
 
     for mes in MESES:
+        data = []
+        registros_count = []
         seleccion = select_data[select_data["mes"] == mes]
         ids2 = seleccion["id"].tolist()
         for file_id in ids2:
@@ -639,12 +659,12 @@ def main() -> None:
             num = len(df["EXT"])
             registros_counta = pd.DataFrame({"id": [file_id], "num": [num]})
             registros_count.append(registros_counta)
+            processed_counts.append(registros_counta)
             logger.info("Archivo procesado id=%s", file_id)
 
-        num_reg = pd.concat(registros_count, axis=0)
         df_mes = pd.concat(data, axis=0)
 
-        # Estimación Base de Datos Diaria.
+        # EstimaciÃ³n Base de Datos Diaria.
         det_diarias = df_mes.copy()
         det_diarias = det_diarias.drop(["Nombre", "Movimiento", "Tipo_sensor"], axis=1)
         det_diarias["Mes"] = (det_diarias["Tiempo"].dt.strftime("%m")) + " " + (
@@ -729,7 +749,7 @@ def main() -> None:
         det_diarias = pd.concat([det_diarias, det_general, det_general2])
         det_diarias["Mes_Ano"] = det_diarias["Mes"] + " " + det_diarias["Ano"]
 
-        # Estimación Base de Datos 15 min transaccional
+        # EstimaciÃ³n Base de Datos 15 min transaccional
         df_resum = df_mes.copy()
         df_resum = df_resum.dropna(subset=["Ocupacion"])
         df_resum["Dia_sem"] = (((df_resum["Tiempo"].dt.dayofweek) + 1).astype(str)) + " " + (
@@ -741,7 +761,7 @@ def main() -> None:
         df_resum = df_resum.reset_index()
         df_resum = df_resum.drop(["Nombre", "index"], axis=1)
 
-        # Estimación Base de Datos Hora transaccional
+        # EstimaciÃ³n Base de Datos Hora transaccional
         df_hora = df_mes.copy()
         df_hora = df_hora.set_index(df_hora["Tiempo"]).drop(["Tiempo"], axis=1)
         df_hora = np.round(
@@ -766,7 +786,7 @@ def main() -> None:
         df_hora = df_hora.set_index(df_hora["Tiempo"]).drop(["Tiempo"], axis=1)
         df_hora = df_hora.reset_index()
 
-        # Actualización base de datos historicas mensuales
+        # ActualizaciÃ³n base de datos historicas mensuales
         dtype_det = {
             "Nombre": VARCHAR2(50),
             "Tiempo": TIMESTAMP,
@@ -788,11 +808,12 @@ def main() -> None:
             if_exists="append",
             index=False,
             dtype=dtype_det,
+            chunksize=to_sql_chunksize,
         )
 
         logger.info("Carga mensual creada: det_15m_sema_%s", mes)
 
-        # Actualización base de datos historicas diario
+        # ActualizaciÃ³n base de datos historicas diario
         dtype_dia = {
             "Tiempo": TIMESTAMP,
             "Ano": VARCHAR2(20),
@@ -813,9 +834,10 @@ def main() -> None:
             if_exists="append",
             index=False,
             dtype=dtype_dia,
+            chunksize=to_sql_chunksize,
         )
 
-        # Actualización base de Datos 15 min transaccional
+        # ActualizaciÃ³n base de Datos 15 min transaccional
         dtype_resum_15m = {
             "Tiempo": TIMESTAMP,
             "IG": VARCHAR2(50),
@@ -840,9 +862,10 @@ def main() -> None:
             if_exists="append",
             index=False,
             dtype=dtype_resum_15m,
+            chunksize=to_sql_chunksize,
         )
 
-        # Actualización base de Datos Hora transaccional
+        # ActualizaciÃ³n base de Datos Hora transaccional
         dtype_resum_hora = {
             "Tiempo": TIMESTAMP,
             "IG": VARCHAR2(50),
@@ -866,10 +889,10 @@ def main() -> None:
             if_exists="append",
             index=False,
             dtype=dtype_resum_hora,
+            chunksize=to_sql_chunksize,
         )
 
-        data = []
-
+    num_reg = pd.concat(processed_counts, axis=0)
     processed_updates = pd.merge(
         select_data.drop(columns=["num"], errors="ignore").copy(),
         num_reg[["id", "num"]],
@@ -888,7 +911,7 @@ def main() -> None:
     # Se actualiza la base de datos de los registros procesados en Google Sheets.
     write_registry_sheet(gspread_client, sheet_url, sheet_tab, registro_n)
 
-    # Actualización base registros
+    # ActualizaciÃ³n base registros
     dtype_reg = {
         "size_in_MB": ORACLE_FLOAT,
         "id": VARCHAR2(50),
@@ -956,3 +979,4 @@ if __name__ == "__main__":
                 duration_sec=round((ended_at_dt - started_at_dt).total_seconds(), 3),
             )
         raise
+

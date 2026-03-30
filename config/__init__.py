@@ -1,0 +1,1 @@
+"""Configuracion reutilizable del proyecto."""

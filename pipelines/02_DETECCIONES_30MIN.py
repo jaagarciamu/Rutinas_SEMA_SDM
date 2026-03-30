@@ -1,13 +1,15 @@
-## LIBRERIAS PARA EL CODIGO
+﻿## LIBRERIAS PARA EL CODIGO
 
 from __future__ import annotations
 
 import io
 import logging
 import os
+import re
 import smtplib
 import sys
 import traceback
+import unicodedata
 from datetime import datetime, timedelta
 from email.message import EmailMessage
 from pathlib import Path
@@ -25,6 +27,7 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipelines.alerting import record_pipeline_failure, record_pipeline_success
+from pipelines.detecciones_file_rules import classify_drive_files
 from sqlalchemy.dialects.oracle import FLOAT, NUMBER, TIMESTAMP, VARCHAR2
 from sqlalchemy.engine import create_engine
 
@@ -34,13 +37,17 @@ DEFAULT_SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/bigquery",
 ]
+DETECCIONES_PROCESSABLE_PATTERN = re.compile(
+    r"^(?:detektor-messquerschnitt|detector-measurement point-traffic data - processed|"
+    r"detector-punto de medici.n-datos de tr.fico - procesados)-(\d{6})_\1\.csv$"
+)
 
 logger = logging.getLogger("detecciones_30min")
 ORACLE_FLOAT = FLOAT(binary_precision=126)
 
 
 class ConfigurationError(RuntimeError):
-    """Error funcional para variables de entorno faltantes o inválidas."""
+    """Error funcional para variables de entorno faltantes o invÃ¡lidas."""
 
 
 class DataAvailabilityError(RuntimeError):
@@ -58,7 +65,7 @@ def setup_logging() -> None:
 
 
 def load_environment() -> None:
-    """Carga variables desde config/.env y luego .env en raíz (si existe)."""
+    """Carga variables desde config/.env y luego .env en raÃ­z (si existe)."""
     load_dotenv(ROOT_DIR / "config" / ".env")
     load_dotenv(ROOT_DIR / ".env")
 
@@ -140,7 +147,7 @@ def get_folder_id_by_name(folder_df: pd.DataFrame, target_name: int, label: str)
     condition = folder_df.loc[folder_df["name"] == target_name]
     if condition.empty:
         raise DataAvailabilityError(
-            f"No se encontró carpeta para {label}={target_name} en estructura de 30min"
+            f"No se encontrÃ³ carpeta para {label}={target_name} en estructura de 30min"
         )
     return str(condition.iloc[0, condition.columns.get_loc("id")])
 
@@ -152,7 +159,35 @@ def safe_to_float(series):
         .str.replace(",", ".", regex=False)
         .where(lambda x: x.str.match(r"^-?\d+(\.\d+)?$"))
         .astype(float)
-    )    
+    )
+
+
+def normalize_detector_name(value: object) -> str:
+    text = str(value).strip().lower()
+    replacements = {
+        "Ã¡": "á",
+        "Ã©": "é",
+        "Ã­": "í",
+        "Ã³": "ó",
+        "Ãº": "ú",
+        "ĂĄ": "á",
+        "Ăł": "ó",
+    }
+    for source, target in replacements.items():
+        text = text.replace(source, target)
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"\s+", " ", text)
+
+
+def is_processable_detecciones_name(series: pd.Series) -> pd.Series:
+    normalized = series.astype(str).map(normalize_detector_name)
+    return normalized.str.match(DETECCIONES_PROCESSABLE_PATTERN, na=False)
+
+
+def get_size_rules() -> tuple[float, float]:
+    min_size_mb = float(os.getenv("DETECCIONES_SEMA_MIN_SIZE_MB", "50"))
+    max_size_mb = float(os.getenv("DETECCIONES_SEMA_MAX_SIZE_MB", "100"))
+    return min_size_mb, max_size_mb
 
 
 def main():
@@ -175,6 +210,7 @@ def main():
     service, access_token = build_google_clients(scopes)
     folder_root_30min = require_env("GOOGLE_DETECCIONES_30MIN_DRIVE_ROOT_FOLDER_ID")
     folder_historico = require_env("GOOGLE_DETECCIONES_DRIVE_FOLDER_ID")
+    min_size_mb, max_size_mb = get_size_rules()
 
     ## SE REVISAN LAS CARPETAS PARA VER SI HAY ARCHIVOS NUEVOS
 
@@ -187,7 +223,7 @@ def main():
         if row["mimeType"] == "application/vnd.google-apps.folder":
             row_data = []
             try:
-                row_data.append(round(int(row["size"])/100000000, 2))
+                row_data.append(round(int(row["size"]) / 1_000_000, 2))
             except KeyError:
                 row_data.append(0.00)
             row_data.append(row["id"])
@@ -211,7 +247,7 @@ def main():
         if row["mimeType"] == "application/vnd.google-apps.folder":
             row_data = []
             try:
-                row_data.append(round(int(row["size"])/100000000, 2))
+                row_data.append(round(int(row["size"]) / 1_000_000, 2))
             except KeyError:
                 row_data.append(0.00)
             row_data.append(row["id"])
@@ -226,7 +262,7 @@ def main():
     dia_ID = get_folder_id_by_name(dia_df, dia, "dia")
 
     if not dia_ID:
-        raise DataAvailabilityError("No se encontró carpeta del día actual para 30min")
+        raise DataAvailabilityError("No se encontrÃ³ carpeta del dÃ­a actual para 30min")
     else:   ## SE ENTRA EN EL CODIGO PRINCIPAL
         engine = build_oracle_engine()
 
@@ -240,7 +276,7 @@ def main():
             if row["mimeType"] == "application/vnd.google-apps.folder":
                 row_data = []
                 try:
-                    row_data.append(round(int(row["size"])/100000000, 2))
+                    row_data.append(round(int(row["size"]) / 1_000_000, 2))
                 except KeyError:
                     row_data.append(0.00)
                 row_data.append(row["id"])
@@ -254,14 +290,14 @@ def main():
         transcurso_df = pd.DataFrame(data, columns = ['size_in_MB','id', 'name', 'creation','last_modification', 'type_of_file'])
         ids_detc = transcurso_df['id'].tolist()[:10]
         if not ids_detc:
-            raise DataAvailabilityError("No hay subcarpetas de detectores para el día actual")
+            raise DataAvailabilityError("No hay subcarpetas de detectores para el dÃ­a actual")
 
         # Se extraen los Id de los ultimos 10 archivos
         data2=[]
         registros_count = []
 
         for decte in ids_detc:
-            ## Conexión con la carpeta donde se localiza los archivos de volúmenes, esta debe ser actualizada antes de correr el código.
+            ## ConexiÃ³n con la carpeta donde se localiza los archivos de volÃºmenes, esta debe ser actualizada antes de correr el cÃ³digo.
             results = service.files().list(q = f"parents='{decte}'",pageSize=1000, fields="nextPageToken, files(id, name, mimeType, size, modifiedTime, createdTime)").execute()
             elemts = results.get('files', [])
 
@@ -272,7 +308,7 @@ def main():
                 if row["mimeType"] != "application/vnd.google-apps.folder":
                     row_data = []
                     try:
-                        row_data.append(round(int(row["size"])/100000000, 2))
+                        row_data.append(round(int(row["size"]) / 1_000_000, 2))
                     except KeyError:
                         row_data.append(0.00)
                     row_data.append(row["id"])
@@ -364,7 +400,7 @@ def main():
         Hoy_TR_1=Hoy_TR_1.drop(['index'], axis=1)
         Hoy_TR=Hoy_TR_1
         if Hoy_TR.empty:
-            raise DataAvailabilityError("No se obtuvieron registros válidos del día actual (30min)")
+            raise DataAvailabilityError("No se obtuvieron registros vÃ¡lidos del dÃ­a actual (30min)")
 
         latest_today_ts = pd.to_datetime(Hoy_TR["Tiempo"], errors="coerce").max()
         min_required_ts = now - timedelta(minutes=max_delay_minutes)
@@ -373,8 +409,8 @@ def main():
         )
         if in_freshness_alert_window and (pd.isna(latest_today_ts) or latest_today_ts < min_required_ts):
             raise DataAvailabilityError(
-                "Registros del día actual fuera de ventana. "
-                f"Último={latest_today_ts}, requerido>={min_required_ts}, "
+                "Registros del dÃ­a actual fuera de ventana. "
+                f"Ãšltimo={latest_today_ts}, requerido>={min_required_ts}, "
                 f"tolerancia={max_delay_minutes} minutos, "
                 f"ventana_alerta={freshness_alert_start_hour}:00-{freshness_alert_end_hour}:00"
             )
@@ -384,7 +420,7 @@ def main():
 
         ## ACTUALIZACION DE LOS DIAS ANTERIORES
 
-        ## Conexión con la carpeta donde se localiza los archivos de volúmenes, esta debe ser actualizada antes de correr el código.
+        ## ConexiÃ³n con la carpeta donde se localiza los archivos de volÃºmenes, esta debe ser actualizada antes de correr el cÃ³digo.
         results = service.files().list(q = f"'{folder_historico}' in parents",pageSize=1000, fields="nextPageToken, files(id, name, mimeType, size, modifiedTime, createdTime)").execute()
         items = results.get('files', [])
 
@@ -394,7 +430,7 @@ def main():
             if row["mimeType"] != "application/vnd.google-apps.folder":
                 row_data = []
                 try:
-                    row_data.append(round(int(row["size"])/100000000, 2))
+                    row_data.append(round(int(row["size"]) / 1_000_000, 2))
                 except KeyError:
                     row_data.append(0.00)
                 row_data.append(row["id"])
@@ -406,8 +442,13 @@ def main():
                 data.append(row_data)
 
         cleared_df = pd.DataFrame(data, columns = ['size_in_MB', 'id', 'name', 'creation','last_modification', 'type_of_file'])
-        cleared_df["date_token"] = cleared_df["name"].str.extract(r"(?<!\d)(\d{6})(?!\d)", expand=True).iloc[:, 0]
-        cleared_df["date"] = pd.to_datetime(cleared_df["date_token"], format="%y%m%d", errors="coerce")
+        cleared_df = classify_drive_files(
+            cleared_df,
+            min_size_mb=min_size_mb,
+            max_size_mb=max_size_mb,
+            target_size_mb=float(os.getenv("DETECCIONES_SEMA_TARGET_SIZE_MB", "67")),
+        )
+        cleared_df["date_token"] = cleared_df["date"].dt.strftime("%y%m%d")
         invalid_date_names = cleared_df[cleared_df["date"].isna()]["name"].tolist()
         if invalid_date_names:
             logger.warning(
@@ -416,21 +457,27 @@ def main():
                 invalid_date_names[:5],
             )
         cleared_df = cleared_df.dropna(subset=["date"]).drop(columns=["date_token"])
-        cleared_df['mes'] = cleared_df['date'].dt.strftime("%y%m")
         cleared_df = cleared_df.sort_values(by=['date'], ascending=False)
-        cleared_df = cleared_df[cleared_df['type_of_file'] == 'text/csv']
-        cleared_df = cleared_df[
-            cleared_df['name'].str.contains(
-                "Detektor-Messquerschnitt|Detector-Measurement Point-Traffic Data - Processed",
-                case=False,  # Ignora mayúsculas/minúsculas si lo deseas
-                na=False     # Evita errores si hay valores NaN
-                    )
-            ]#cleared_df = cleared_df[cleared_df['name'].str.contains("Detektor-Messquerschnitt")]
+        excluded_by_size = cleared_df[cleared_df["Estado"].eq("No_Cumple")].copy()
+        duplicate_df = cleared_df[cleared_df["Estado"].eq("Duplicado")].copy()
+        cleared_df = cleared_df[cleared_df["Estado"].eq("Pendiente")].copy()
+        if not excluded_by_size.empty:
+            logger.warning(
+                "Se excluyeron %s archivo(s) historicos 30min por tamano fuera de rango (%s MB a %s MB).",
+                len(excluded_by_size),
+                min_size_mb,
+                max_size_mb,
+            )
+        if not duplicate_df.empty:
+            logger.warning(
+                "Se omitieron %s archivo(s) historicos 30min marcados como Duplicado.",
+                len(duplicate_df),
+            )
 
         has_yesterday = (cleared_df["date"].dt.date == ayer_truncado.date()).any()
         if not has_yesterday:
             raise DataAvailabilityError(
-                f"No se encontraron archivos del día anterior ({ayer_truncado.date()}) en carpeta histórica"
+                f"No se encontraron archivos del dÃ­a anterior ({ayer_truncado.date()}) en carpeta histÃ³rica"
             )
 
         hace_dos_dias = datetime.now() - timedelta(days=dias_antes)
@@ -439,7 +486,7 @@ def main():
         ids =select_data['id'].tolist()
         if not ids:
             raise DataAvailabilityError(
-                "No hay archivos históricos elegibles (incluyendo día anterior) para construir referencia 30min"
+                "No hay archivos histÃ³ricos elegibles (incluyendo dÃ­a anterior) para construir referencia 30min"
             )
 
         #Procesamiento dias anteriores
@@ -569,18 +616,18 @@ def main():
         T_real_p['Value'] = pd.to_numeric(T_real_p['Value'], errors='coerce')
 
 
-        # Lista ordenada de días SOLO para referencia visual
+        # Lista ordenada de dÃ­as SOLO para referencia visual
         dias_ordenados = ['Monday', 'Tuesday', 'Wednesday', 'Thursday','Friday', 'Saturday', 'Sunday']
-        # Índice del día actual (0 = Monday, 6 = Sunday)
+        # Ãndice del dÃ­a actual (0 = Monday, 6 = Sunday)
         indice_hoy = datetime.now().weekday()
         # Valores a asignar
         valores = [2, 1, 0, -1, -2, -3, -4]
-        # Mapeo basado en índice (NO en texto)
+        # Mapeo basado en Ã­ndice (NO en texto)
         mapeo_dias = {}
         for i, valor in enumerate(valores):
             indice = (indice_hoy - i) % 7
             mapeo_dias[indice] = valor
-        # Crear columna auxiliar de índice de día
+        # Crear columna auxiliar de Ã­ndice de dÃ­a
         T_real_p['dia_idx'] = T_real_p['Tiempo'].dt.weekday
         # Asignar orden
         T_real_p['Orden'] = (T_real_p['dia_idx'].map(mapeo_dias).astype(str)+ T_real_p['Tiempo'].dt.strftime('%a').str.capitalize()+ ' '+ T_real_p['Horas'])
@@ -589,7 +636,7 @@ def main():
 
         ## ESCRITURA DE ARCHIVOS EN ORACLE
 
-        # Actualización base de datos historicas mensuales
+        # ActualizaciÃ³n base de datos historicas mensuales
         dtype_PROM = { "Nombre" : VARCHAR2(100), "Tiempo" : TIMESTAMP, "EXT" : VARCHAR2(20), "Acceso" : VARCHAR2(20), "Tipo_sensor" : VARCHAR2(20),"Sensor" : VARCHAR2(20),
                             "Num_deteccion": NUMBER,"Deteccion": NUMBER,"Ocupacion": ORACLE_FLOAT,"Brecha": ORACLE_FLOAT,"Velocidad": ORACLE_FLOAT,"Dia_sem" : VARCHAR2(20),"Horas" : VARCHAR2(20),"Llave" : VARCHAR2(50),
                             "Deteccion_prom": NUMBER,"Ocupacion_prom": ORACLE_FLOAT,"Brecha_prom": ORACLE_FLOAT,"Velocidad_prom": ORACLE_FLOAT,
@@ -603,7 +650,7 @@ def main():
         )
 
 
-        # Actualización base de datos historicas mensuales
+        # ActualizaciÃ³n base de datos historicas mensuales
         dtype_PIVOT = { "Nombre" : VARCHAR2(100), "Tiempo" : TIMESTAMP, "EXT" : VARCHAR2(20), "Acceso" : VARCHAR2(20), "Tipo_sensor" : VARCHAR2(20),"Sensor" : VARCHAR2(20),
                         "Dia_sem" : VARCHAR2(20),"Horas" : VARCHAR2(20),"Llave" : VARCHAR2(50),
                             "Analisis": VARCHAR2(20),'Value': ORACLE_FLOAT, "Orden": VARCHAR2(20)
@@ -652,3 +699,5 @@ if __name__ == "__main__":
             body=f"Error: {exc}\n\nTraceback:\n{error_trace}",
         )
         raise
+
+

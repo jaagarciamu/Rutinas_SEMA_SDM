@@ -16,10 +16,19 @@ if not defined PYTHON_EXE (
 )
 
 set "LOCK_DIR=logs\scheduler.lock"
+set "LOCK_MAX_AGE_MINUTES=180"
 mkdir "%LOCK_DIR%" 2>nul
 if errorlevel 1 (
-  echo [%date% %time%] INFO: Scheduler en ejecucion, se omite corrida solapada.>>"logs\task_scheduler.log"
-  exit /b 0
+  for /f %%A in ('powershell -NoProfile -Command "$lock = Get-Item -LiteralPath ''%LOCK_DIR%'' -ErrorAction SilentlyContinue; if (-not $lock) { ''missing'' } elseif (((Get-Date) - $lock.CreationTime).TotalMinutes -ge %LOCK_MAX_AGE_MINUTES%) { ''stale'' } else { ''active'' }"') do set "LOCK_STATUS=%%A"
+  if /I "!LOCK_STATUS!"=="stale" (
+    echo [%date% %time%] WARN: Lock huÃ©rfano detectado; se elimina automaticamente.>>"logs\task_scheduler.log"
+    rmdir "%LOCK_DIR%" >nul 2>&1
+    mkdir "%LOCK_DIR%" 2>nul
+  )
+  if errorlevel 1 (
+    echo [%date% %time%] INFO: Scheduler en ejecucion, se omite corrida solapada.>>"logs\task_scheduler.log"
+    exit /b 0
+  )
 )
 
 echo [%date% %time%] START run_scheduler.py python="%PYTHON_EXE%">>"logs\task_scheduler.log"
