@@ -236,6 +236,51 @@ def load_registry_sheet(gspread_client: gspread.Client, sheet_url: str, sheet_ta
     return ensure_required_columns(registro_df)
 
 
+def load_registry_backup_from_oracle(engine, table_name: str) -> pd.DataFrame:
+    logger.warning(
+        "Registro Sheet vacio o invalido; se intentara recuperar respaldo Oracle desde %s",
+        table_name,
+    )
+    registro_df = pd.read_sql(f"SELECT * FROM {table_name}", engine)
+    if registro_df.empty:
+        raise DataAvailabilityError(
+            f"El respaldo Oracle {table_name} esta vacio y no permite reconstruir el registro"
+        )
+    return ensure_required_columns(registro_df)
+
+
+def load_registry_with_oracle_fallback(
+    gspread_client: gspread.Client,
+    sheet_url: str,
+    sheet_tab: str,
+    engine,
+    oracle_table_name: str,
+) -> pd.DataFrame:
+    try:
+        worksheet = gspread_client.open_by_url(sheet_url).worksheet(sheet_tab)
+        raw = worksheet.get_all_values()
+        if not raw:
+            return load_registry_backup_from_oracle(engine, oracle_table_name)
+
+        registro_df = pd.DataFrame.from_records(raw)
+        if registro_df.empty or registro_df.shape[1] == 0:
+            return load_registry_backup_from_oracle(engine, oracle_table_name)
+
+        header = registro_df.iloc[0].astype(str).str.strip()
+        if not header.any():
+            return load_registry_backup_from_oracle(engine, oracle_table_name)
+
+        registro_df.columns = registro_df.iloc[0]
+        registro_df = registro_df.drop(registro_df.index[0]).reset_index(drop=True)
+        return ensure_required_columns(registro_df)
+    except (IndexError, ValueError) as exc:
+        logger.warning(
+            "No fue posible leer la estructura del Registro Sheet; se usara respaldo Oracle. detalle=%s",
+            exc,
+        )
+        return load_registry_backup_from_oracle(engine, oracle_table_name)
+
+
 def write_registry_sheet(
     gspread_client: gspread.Client,
     sheet_url: str,
@@ -415,12 +460,19 @@ def main() -> None:
 
     scopes = parse_scopes(os.getenv("GOOGLE_SCOPES"))
     gspread_client, drive_service, access_token = build_google_clients(scopes)
+    engine = build_oracle_engine()
 
     sheet_url = require_env("GOOGLE_DETECCIONES_SHEET_URL")
     sheet_tab = require_env("GOOGLE_DETECCIONES_WORKSHEET")
     drive_folder_id = require_env("GOOGLE_DETECCIONES_DRIVE_FOLDER_ID")
 
-    registro_sheet = load_registry_sheet(gspread_client, sheet_url, sheet_tab)
+    registro_sheet = load_registry_with_oracle_fallback(
+        gspread_client,
+        sheet_url,
+        sheet_tab,
+        engine,
+        "det_reg_sema",
+    )
     drive_df = list_drive_files(drive_service, drive_folder_id)
     Registro, sync_stats = sync_registry_by_name(registro_sheet, drive_df)
     Registro = dedupe_registry_by_name(Registro)
@@ -541,7 +593,6 @@ def main() -> None:
         logger.info("No hay registros nuevos")
         return
 
-    engine = build_oracle_engine()
     to_sql_chunksize = get_to_sql_chunksize()
 
     for mes in MESES:
