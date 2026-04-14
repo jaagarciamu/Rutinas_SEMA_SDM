@@ -13,6 +13,7 @@ import gspread_dataframe as gd
 import numpy as np
 import pandas as pd
 import requests
+from gspread.exceptions import SpreadsheetNotFound, WorksheetNotFound
 from dotenv import load_dotenv
 from google.auth.transport.requests import Request
 from google.oauth2 import service_account
@@ -75,6 +76,17 @@ def require_env(name: str) -> str:
     value = os.getenv(name, "").strip()
     if not value:
         raise ConfigurationError(f"Variable de entorno requerida no definida: {name}")
+    return value
+
+
+def require_non_placeholder_env(name: str) -> str:
+    value = require_env(name)
+    placeholders = {"your_", "xxxxx", "example", "change_me"}
+    lowered = value.lower()
+    if any(token in lowered for token in placeholders):
+        raise ConfigurationError(
+            f"Variable de entorno {name} contiene un valor placeholder y debe configurarse con un valor real"
+        )
     return value
 
 
@@ -152,8 +164,29 @@ def ensure_registry_columns(registro_df: pd.DataFrame) -> pd.DataFrame:
     return registro[ordered_columns]
 
 
+def upsert_registry_rows(registro_df: pd.DataFrame, updates_df: pd.DataFrame) -> pd.DataFrame:
+    registro = ensure_registry_columns(registro_df)
+    updates = ensure_registry_columns(updates_df)
+    if updates.empty:
+        return registro
+
+    update_ids = updates["id"].astype(str)
+    registro = registro[~registro["id"].astype(str).isin(update_ids)].copy()
+    return pd.concat([registro, updates], ignore_index=True)
+
+
 def load_registry_sheet(gspread_client: gspread.Client, sheet_url: str, worksheet_name: str) -> pd.DataFrame:
-    worksheet = gspread_client.open_by_url(sheet_url).worksheet(worksheet_name)
+    try:
+        worksheet = gspread_client.open_by_url(sheet_url).worksheet(worksheet_name)
+    except SpreadsheetNotFound as exc:
+        raise ConfigurationError(
+            "No fue posible abrir la hoja configurada en PLANES_SHEET_URL. "
+            "Verifica que la URL sea correcta y que la cuenta de servicio tenga acceso al archivo."
+        ) from exc
+    except WorksheetNotFound as exc:
+        raise ConfigurationError(
+            f"La pestaña '{worksheet_name}' no existe en la hoja configurada en PLANES_SHEET_URL."
+        ) from exc
     raw = worksheet.get_all_values()
     if not raw:
         return pd.DataFrame(columns=REQUIRED_REGISTRY_COLUMNS)
@@ -163,13 +196,79 @@ def load_registry_sheet(gspread_client: gspread.Client, sheet_url: str, workshee
     return ensure_registry_columns(registro_df)
 
 
+def load_registry_backup_from_oracle(engine, table_name: str) -> pd.DataFrame:
+    logger.warning(
+        "Registro Sheet vacio o invalido; se intentara recuperar respaldo Oracle desde %s",
+        table_name,
+    )
+    registro_df = pd.read_sql(f"SELECT * FROM {table_name}", engine)
+    if registro_df.empty:
+        raise DataAvailabilityError(
+            f"El respaldo Oracle {table_name} esta vacio y no permite reconstruir el registro"
+        )
+    return ensure_registry_columns(registro_df)
+
+
+def load_registry_with_oracle_fallback(
+    gspread_client: gspread.Client,
+    sheet_url: str,
+    worksheet_name: str,
+    engine,
+    oracle_table_name: str,
+) -> pd.DataFrame:
+    try:
+        worksheet = gspread_client.open_by_url(sheet_url).worksheet(worksheet_name)
+    except SpreadsheetNotFound as exc:
+        raise ConfigurationError(
+            "No fue posible abrir la hoja configurada en PLANES_SHEET_URL. "
+            "Verifica que la URL sea correcta y que la cuenta de servicio tenga acceso al archivo."
+        ) from exc
+    except WorksheetNotFound as exc:
+        raise ConfigurationError(
+            f"La pestaÃ±a '{worksheet_name}' no existe en la hoja configurada en PLANES_SHEET_URL."
+        ) from exc
+
+    try:
+        raw = worksheet.get_all_values()
+        if not raw:
+            return load_registry_backup_from_oracle(engine, oracle_table_name)
+
+        registro_df = pd.DataFrame.from_records(raw)
+        if registro_df.empty or registro_df.shape[1] == 0:
+            return load_registry_backup_from_oracle(engine, oracle_table_name)
+
+        header = registro_df.iloc[0].astype(str).str.strip()
+        if not header.any():
+            return load_registry_backup_from_oracle(engine, oracle_table_name)
+
+        registro_df.columns = registro_df.iloc[0]
+        registro_df = registro_df.drop(registro_df.index[0]).reset_index(drop=True)
+        return ensure_registry_columns(registro_df)
+    except (IndexError, ValueError) as exc:
+        logger.warning(
+            "No fue posible leer la estructura del Registro Sheet; se usara respaldo Oracle. detalle=%s",
+            exc,
+        )
+        return load_registry_backup_from_oracle(engine, oracle_table_name)
+
+
 def write_dataframe_to_sheet(
     gspread_client: gspread.Client,
     sheet_url: str,
     worksheet_name: str,
     dataframe: pd.DataFrame,
 ) -> None:
-    worksheet = gspread_client.open_by_url(sheet_url).worksheet(worksheet_name)
+    try:
+        worksheet = gspread_client.open_by_url(sheet_url).worksheet(worksheet_name)
+    except SpreadsheetNotFound as exc:
+        raise ConfigurationError(
+            "No fue posible abrir la hoja configurada en PLANES_SHEET_URL para escritura. "
+            "Verifica la URL y los permisos de la cuenta de servicio."
+        ) from exc
+    except WorksheetNotFound as exc:
+        raise ConfigurationError(
+            f"La pestaña '{worksheet_name}' no existe en la hoja configurada en PLANES_SHEET_URL."
+        ) from exc
     worksheet.clear()
     gd.set_with_dataframe(worksheet=worksheet, dataframe=dataframe, include_index=False)
 
@@ -317,7 +416,7 @@ def main() -> None:
         else None
     )
 
-    sheet_url = require_env("PLANES_SHEET_URL")
+    sheet_url = require_non_placeholder_env("PLANES_SHEET_URL")
     registro_tab = os.getenv("PLANES_REGISTRO_WORKSHEET", "Registro").strip() or "Registro"
     planes_tab = os.getenv("PLANES_ACTUAL_WORKSHEET", "Planes").strip() or "Planes"
     drive_folder_id = require_env("PLANES_DRIVE_FOLDER_ID")
@@ -325,7 +424,13 @@ def main() -> None:
     lookback_weeks = int(os.getenv("PLANES_HISTORY_LOOKBACK_WEEKS", "1"))
     sgm_schema = os.getenv("PLANES_SGM_SCHEMA", "SGMEDICION").strip() or "SGMEDICION"
 
-    registro_df = load_registry_sheet(gspread_client, sheet_url, registro_tab)
+    registro_df = load_registry_with_oracle_fallback(
+        gspread_client,
+        sheet_url,
+        registro_tab,
+        main_engine,
+        "plan_reg_sema",
+    )
     drive_df = list_drive_files(drive_service, drive_folder_id)
     if drive_df.empty:
         ensure_recent_updates(registro_df, max_staleness_hours)
@@ -350,6 +455,8 @@ def main() -> None:
 
     parsed_data: list[pd.DataFrame] = []
     registros_count: list[pd.DataFrame] = []
+    successful_ids: list[str] = []
+    failed_ids: list[str] = []
     for file_id in ids:
         file_url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
         response = requests.get(
@@ -362,9 +469,11 @@ def main() -> None:
         parsed = parse_plan_file(response.text, str(guia))
         if parsed.empty:
             logger.warning("Archivo sin planes parseables id=%s", file_id)
+            failed_ids.append(file_id)
             continue
         parsed_data.append(parsed)
         registros_count.append(pd.DataFrame({"id": [file_id], "num_plan": [len(parsed)]}))
+        successful_ids.append(file_id)
         logger.info("Archivo procesado id=%s planes=%s", file_id, len(parsed))
 
     if not parsed_data:
@@ -428,7 +537,7 @@ def main() -> None:
     write_dataframe_to_sheet(gspread_client, sheet_url, planes_tab, planes)
 
     num_reg = pd.concat(registros_count, axis=0)
-    processed_updates = pending.copy()
+    processed_updates = pending[pending["id"].isin(successful_ids)].copy()
     processed_updates.loc[:, "Estado"] = "Procesado"
     processed_updates = pd.merge(
         processed_updates,
@@ -437,7 +546,13 @@ def main() -> None:
         right_on="id",
         how="left",
     )
-    registro_n = pd.concat([registro_df, processed_updates], ignore_index=True)
+    retry_updates = pending[pending["id"].isin(failed_ids)].copy()
+    if not retry_updates.empty:
+        retry_updates.loc[:, "Estado"] = "Pendiente"
+        retry_updates.loc[:, "num_plan"] = np.nan
+
+    registry_updates = pd.concat([processed_updates, retry_updates], ignore_index=True)
+    registro_n = upsert_registry_rows(registro_df, registry_updates)
     registro_n["date"] = pd.to_datetime(registro_n["date"], errors="coerce")
     for col in ["size_in_MB", "guia", "num_plan"]:
         if col in registro_n.columns:
@@ -487,6 +602,11 @@ def main() -> None:
         logger.info("Actualizacion SUANET-SGM deshabilitada por configuracion")
 
     logger.info("Se actualizan %s registro(s) de planes - SEMA", len(ids))
+    if failed_ids:
+        logger.warning(
+            "Quedan %s archivo(s) en estado Pendiente para reintento por falta de planes parseables",
+            len(failed_ids),
+        )
 
 
 if __name__ == "__main__":

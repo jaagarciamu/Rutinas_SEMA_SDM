@@ -134,6 +134,51 @@ def load_registry_sheet(gspread_client: gspread.Client, sheet_url: str, workshee
     return ensure_registry_columns(registro_df)
 
 
+def load_registry_backup_from_oracle(engine, table_name: str) -> pd.DataFrame:
+    logger.warning(
+        "Registro Sheet vacio o invalido; se intentara recuperar respaldo Oracle desde %s",
+        table_name,
+    )
+    registro_df = pd.read_sql(f"SELECT * FROM {table_name}", engine)
+    if registro_df.empty:
+        raise DataAvailabilityError(
+            f"El respaldo Oracle {table_name} esta vacio y no permite reconstruir el registro"
+        )
+    return ensure_registry_columns(registro_df)
+
+
+def load_registry_with_oracle_fallback(
+    gspread_client: gspread.Client,
+    sheet_url: str,
+    worksheet_name: str,
+    engine,
+    oracle_table_name: str,
+) -> pd.DataFrame:
+    try:
+        worksheet = gspread_client.open_by_url(sheet_url).worksheet(worksheet_name)
+        raw = worksheet.get_all_values()
+        if not raw:
+            return load_registry_backup_from_oracle(engine, oracle_table_name)
+
+        registro_df = pd.DataFrame.from_records(raw)
+        if registro_df.empty or registro_df.shape[1] == 0:
+            return load_registry_backup_from_oracle(engine, oracle_table_name)
+
+        header = registro_df.iloc[0].astype(str).str.strip()
+        if not header.any():
+            return load_registry_backup_from_oracle(engine, oracle_table_name)
+
+        registro_df.columns = registro_df.iloc[0]
+        registro_df = registro_df.drop(registro_df.index[0]).reset_index(drop=True)
+        return ensure_registry_columns(registro_df)
+    except (IndexError, ValueError) as exc:
+        logger.warning(
+            "No fue posible leer la estructura del Registro Sheet; se usara respaldo Oracle. detalle=%s",
+            exc,
+        )
+        return load_registry_backup_from_oracle(engine, oracle_table_name)
+
+
 def write_dataframe_to_sheet(
     gspread_client: gspread.Client,
     sheet_url: str,
@@ -316,7 +361,13 @@ def main() -> None:
         }
     )
 
-    registro_df = load_registry_sheet(gspread_client, sheet_url, registro_tab)
+    registro_df = load_registry_with_oracle_fallback(
+        gspread_client,
+        sheet_url,
+        registro_tab,
+        engine,
+        "est_sua_reg_sema",
+    )
     drive_df = list_drive_files(drive_service, drive_folder_id)
     if drive_df.empty:
         ensure_recent_updates(registro_df, max_staleness_hours)

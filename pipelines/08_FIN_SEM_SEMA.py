@@ -324,6 +324,62 @@ def load_sheet_records(
     return sort_registry_for_output(registro)
 
 
+def load_registry_backup_from_oracle(engine, table_name: str) -> pd.DataFrame:
+    print(f"Registro Sheet vacio o invalido; se intentara recuperar respaldo Oracle desde {table_name}")
+    registro = pd.read_sql(f"SELECT * FROM {table_name}", engine)
+    if registro.empty:
+        raise ConfigurationError(
+            f"El respaldo Oracle {table_name} esta vacio y no permite reconstruir el registro"
+        )
+    registro = ensure_required_columns(registro)
+    registro["num"] = pd.to_numeric(registro["num"], errors="coerce").fillna(0).astype(int)
+    registro["size_in_MB"] = pd.to_numeric(registro["size_in_MB"], errors="coerce").fillna(0.0)
+    registro["mes"] = pd.to_numeric(registro["mes"], errors="coerce").fillna(0).astype(int)
+    registro["date"] = pd.to_datetime(registro["date"], errors="coerce")
+    return sort_registry_for_output(registro)
+
+
+def load_sheet_records_with_oracle_fallback(
+    gspread_client: gspread.Client,
+    sheet_url: str,
+    worksheet_name: str,
+    engine,
+    oracle_table_name: str,
+) -> pd.DataFrame:
+    try:
+        worksheet = gspread_client.open_by_url(sheet_url).worksheet(worksheet_name)
+        data = worksheet.get_all_values()
+        if not data:
+            return load_registry_backup_from_oracle(engine, oracle_table_name)
+
+        registro = pd.DataFrame.from_records(data)
+        if registro.empty or registro.shape[1] == 0:
+            return load_registry_backup_from_oracle(engine, oracle_table_name)
+
+        header = registro.iloc[0].astype(str).str.strip()
+        if not header.any():
+            return load_registry_backup_from_oracle(engine, oracle_table_name)
+
+        registro.columns = registro.iloc[0]
+        registro = registro.drop(registro.index[0]).reset_index(drop=True)
+        registro = ensure_required_columns(registro)
+        registro["num"] = registro["num"].replace("", "0", regex=True)
+        registro["size_in_MB"] = registro["size_in_MB"].replace("", "0", regex=True)
+        registro["size_in_MB"] = registro["size_in_MB"].replace(",", ".", regex=True)
+        registro["mes"] = registro["mes"].replace("", "0", regex=True)
+        registro["size_in_MB"] = pd.to_numeric(registro["size_in_MB"], errors="coerce").fillna(0.0)
+        registro["mes"] = pd.to_numeric(registro["mes"], errors="coerce").fillna(0).astype(int)
+        registro["num"] = pd.to_numeric(registro["num"], errors="coerce").fillna(0).astype(int)
+        registro["date"] = pd.to_datetime(registro["date"], errors="coerce")
+        return sort_registry_for_output(registro)
+    except (IndexError, ValueError) as exc:
+        print(
+            "No fue posible leer la estructura del Registro Sheet; "
+            f"se usara respaldo Oracle. detalle={exc}"
+        )
+        return load_registry_backup_from_oracle(engine, oracle_table_name)
+
+
 def replace_sheet_records(
     gspread_client: gspread.Client,
     sheet_url: str,
@@ -393,7 +449,13 @@ def main():
     # Se va aconsultar la base donde estan todas las detecciones
     registro_sheet_url = str(settings["registro_sheet_url"])
     registro_worksheet = str(settings["registro_worksheet"])
-    Registro = load_sheet_records(gc, registro_sheet_url, registro_worksheet)
+    Registro = load_sheet_records_with_oracle_fallback(
+        gc,
+        registro_sheet_url,
+        registro_worksheet,
+        engine,
+        "fin_reg_sema",
+    )
 
     ## Conexión con la carpeta donde se localiza los archivos de volúmenes, esta debe ser actualizada antes de correr el código.
     historico_df = list_drive_files(service, str(settings["historico_folder_id"]))
