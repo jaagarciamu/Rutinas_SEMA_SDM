@@ -237,6 +237,7 @@ def execute_pipeline(
     pipeline_id: str,
     script: str,
     args: list[str],
+    timeout_seconds: int,
 ) -> int:
     script_path = ROOT_DIR / script
     started_at_dt = datetime.now()
@@ -269,14 +270,52 @@ def execute_pipeline(
         },
     )
 
-    result = subprocess.run(
-        cmd,
-        cwd=str(ROOT_DIR),
-        env={**os.environ, "PIPELINE_INVOKED_BY_SCHEDULER": "1"},
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=str(ROOT_DIR),
+            env={**os.environ, "PIPELINE_INVOKED_BY_SCHEDULER": "1"},
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        ended_at_dt = datetime.now()
+        ended_at = ended_at_dt.isoformat()
+        duration_sec = round((ended_at_dt - started_at_dt).total_seconds(), 3)
+        stdout = (exc.stdout or "").strip()
+        stderr = (exc.stderr or "").strip()
+        if stdout:
+            logger.info(
+                stdout,
+                extra={"event": "pipeline_stdout", "pipeline": pipeline_id},
+            )
+        if stderr:
+            logger.warning(
+                stderr,
+                extra={"event": "pipeline_stderr", "pipeline": pipeline_id},
+            )
+        logger.error(
+            "Pipeline excedio el tiempo maximo permitido",
+            extra={
+                "event": "pipeline_timeout",
+                "pipeline": pipeline_id,
+                "timeout_seconds": timeout_seconds,
+            },
+        )
+        record_pipeline_failure(
+            pipeline_id=pipeline_id,
+            message=f"Pipeline excedio el timeout de {timeout_seconds} segundos",
+            error_type="pipeline_timeout",
+            details=stderr,
+            source="scheduler",
+            started_at=started_at,
+            ended_at=ended_at,
+            duration_sec=duration_sec,
+        )
+        return 124
+
     ended_at_dt = datetime.now()
     ended_at = ended_at_dt.isoformat()
     duration_sec = round((ended_at_dt - started_at_dt).total_seconds(), 3)
@@ -346,6 +385,9 @@ def main() -> int:
         return 1
 
     tick_minutes = int(config.get("scheduler", {}).get("tick_minutes", 5))
+    default_pipeline_timeout_seconds = int(
+        config.get("scheduler", {}).get("pipeline_timeout_minutes", 20)
+    ) * 60
     if not validate_schedule_alignment(logger, pipelines, tick_minutes):
         return 1
 
@@ -404,7 +446,16 @@ def main() -> int:
                 max_rc = max(max_rc, 1)
                 continue
 
-            rc = execute_pipeline(logger, pipeline_id, script, [str(arg) for arg in args])
+            timeout_seconds = int(
+                pipeline.get("timeout_minutes", default_pipeline_timeout_seconds // 60)
+            ) * 60
+            rc = execute_pipeline(
+                logger,
+                pipeline_id,
+                script,
+                [str(arg) for arg in args],
+                timeout_seconds,
+            )
             max_rc = max(max_rc, rc)
         else:
             logger.info(

@@ -29,7 +29,8 @@ set "LOCK_DIR=logs\scheduler.lock"
 set "LOCK_MAX_AGE_MINUTES=180"
 mkdir "%LOCK_DIR%" 2>nul
 if errorlevel 1 (
-  for /f %%A in ('powershell -NoProfile -Command "$lock = Get-Item -LiteralPath ''%LOCK_DIR%'' -ErrorAction SilentlyContinue; if (-not $lock) { ''missing'' } elseif (((Get-Date) - $lock.CreationTime).TotalMinutes -ge %LOCK_MAX_AGE_MINUTES%) { ''stale'' } else { ''active'' }"') do set "LOCK_STATUS=%%A"
+  set "LOCK_STATUS=unknown"
+  for /f %%A in ('powershell -NoProfile -Command "$lock = Get-Item -LiteralPath $env:LOCK_DIR -ErrorAction SilentlyContinue; if (-not $lock) { Write-Output missing } elseif (((Get-Date) - $lock.CreationTime).TotalMinutes -ge [double]$env:LOCK_MAX_AGE_MINUTES) { Write-Output stale } else { Write-Output active }"') do set "LOCK_STATUS=%%A"
   if /I "!LOCK_STATUS!"=="stale" (
     echo [%date% %time%] WARN: Lock huerfano detectado; se elimina automaticamente.>>"!LOG_FILE!"
     rmdir "%LOCK_DIR%" >nul 2>&1

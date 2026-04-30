@@ -119,7 +119,7 @@ def transform_kpi(dataframe: pd.DataFrame) -> pd.DataFrame:
         return dataframe
 
     kpi_df = dataframe.copy()
-    excluded_columns = {"DIRECCION", "KPI_DISPONIBILIDAD", "KPI_CONFIABILIDAD", "KPI_MANTENIBILIDAD","ESCENARIO_DE_ACCION"}
+    excluded_columns = {"MES","DIRECCION", "KPI_DISPONIBILIDAD_REAL", "KPI_CONFIABILIDAD_OPERATIVA", "KPI_MANTENIBILIDAD_EJECUTADA","KPI_CONFIABILIDAD_PROYECTADA","KPI_MANTENIBILIDAD_ESTIMADA","MES_PRONOSTICO","ESCENARIO_DE_ACCION"}
 
     kpi_df.columns = [normalize_column_name(col) for col in kpi_df.columns]
 
@@ -146,7 +146,7 @@ def transform_kpi(dataframe: pd.DataFrame) -> pd.DataFrame:
     if percent_columns:
         kpi_df[percent_columns] = kpi_df[percent_columns] / 100
 
-    for column in ["ID", "EXTERNO"]:
+    for column in ["EXTERNO"]:
         if column in kpi_df.columns:
             kpi_df[column] = kpi_df[column].map(
                 lambda value: (
@@ -161,22 +161,34 @@ def transform_kpi(dataframe: pd.DataFrame) -> pd.DataFrame:
     return kpi_df
 
 
+
+
 def write_kpi_table(engine, dataframe: pd.DataFrame, table_name: str) -> None:
     dtype_kpi = {
-        "ID": VARCHAR2(50),
+        "MES": VARCHAR2(50),
         "EXTERNO": VARCHAR2(50),
         "DIRECCION": VARCHAR2(250),
-        "CANTIDAD_DE_FALLAS_ULTIMOS_6_MESES_FIJAR_6_MESES": NUMBER,
-        "TOTAL_DE_HORAS_DE_FALLA": FLOAT,
-        "TIEMPO_MEDIO_ENTRE_FALLAS_MTBF_DIAS": FLOAT,
-        "TIEMPO_MEDIO_DE_REPARACION_MTTR_HORAS": FLOAT,
-        "DISPONIBILIDAD_PARA_EL_PERIODO": FLOAT,
-        "MANTENIBILIDAD": FLOAT,
-        "CONFIABILIDAD": FLOAT,
-        "KPI_DISPONIBILIDAD": VARCHAR2(50),
-        "KPI_CONFIABILIDAD": VARCHAR2(50),
-        "KPI_MANTENIBILIDAD": VARCHAR2(50),
-        "ESCENARIO_DE_ACCION": VARCHAR2(50),
+        "CANTIDAD_EVENTOS_OBSERVADOS": FLOAT,
+        "DURACION_EVENTOS_OBSERVADOS": FLOAT,
+        "MTBF_OBSERVADO": FLOAT,
+        "MTTR_OBSERVADO": FLOAT,
+        "DISPONIBILIDAD_INHERENTE": FLOAT,
+        "MANTENIBILIDAD_OBSERVADA": FLOAT,
+        "CONFIABILIDAD_OPERATIVA": FLOAT,
+		"KPI_DISPONIBILIDAD_REAL": VARCHAR2(100),
+        "KPI_CONFIABILIDAD_OPERATIVA": VARCHAR2(100),
+		"KPI_MANTENIBILIDAD_EJECUTADA": VARCHAR2(100),
+        "CANTIDAD_EVENTOS_P": NUMBER,
+        "DURACION_EVENTOS_P": FLOAT,
+        "MTBF_ESTIMADO": FLOAT,
+        "MTTR_ESTIMADO": FLOAT,
+		"MANTENIBILIDAD_ESTIMADA": FLOAT,
+		"CONFIABILIDAD_PROYECTADA": FLOAT,
+        "KPI_CONFIABILIDAD_PROYECTADA": VARCHAR2(100),
+        "KPI_MANTENIBILIDAD_ESTIMADA": VARCHAR2(100),
+        "MES_PRONOSTICO": VARCHAR2(50),
+		"ESCENARIO_DE_ACCION": VARCHAR2(100),
+        #"PMT": VARCHAR2(250),
     }
     typed_columns = {col: dtype_kpi[col] for col in dataframe.columns if col in dtype_kpi}
     dataframe.to_sql(

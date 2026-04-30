@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -90,7 +91,7 @@ def _sort_sheet_events(df: pd.DataFrame) -> pd.DataFrame:
     return sorted_df.drop(columns=["_timestamp_sort"], errors="ignore").reset_index(drop=True)
 
 
-def _append_event_to_sheet(event: dict[str, Any]) -> None:
+def _append_event_to_sheet_sync(event: dict[str, Any]) -> None:
     try:
         sheet_cfg = _get_sheet_client()
         if not sheet_cfg:
@@ -114,6 +115,23 @@ def _append_event_to_sheet(event: dict[str, Any]) -> None:
     except Exception:
         # Las alertas en Google Sheets son opcionales; no deben romper el pipeline.
         return
+
+
+def _append_event_to_sheet(event: dict[str, Any]) -> None:
+    timeout_seconds = int(os.getenv("ALERTS_SHEET_TIMEOUT_SECONDS", "30").strip() or "30")
+    if timeout_seconds <= 0:
+        _append_event_to_sheet_sync(event)
+        return
+
+    process = multiprocessing.get_context("spawn").Process(
+        target=_append_event_to_sheet_sync,
+        args=(event,),
+    )
+    process.start()
+    process.join(timeout_seconds)
+    if process.is_alive():
+        process.terminate()
+        process.join(5)
 
 
 def record_event(

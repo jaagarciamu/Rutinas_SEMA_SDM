@@ -3,6 +3,7 @@ project:
 
 scheduler:
   tick_minutes: 5
+  pipeline_timeout_minutes: 20
 
 paths:
   input_mail_dir: "data/inbox/correos"
