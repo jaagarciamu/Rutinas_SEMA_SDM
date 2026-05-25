@@ -95,7 +95,30 @@ def load_sheet_data(
     raw = worksheet.batch_get((data_range,))[0]
     if not raw or len(raw) < 2:
         return pd.DataFrame()
-    return pd.DataFrame.from_records(raw[1:], columns=raw[0])
+    headers = raw[0]
+    normalized_rows: list[list[object]] = []
+    truncated_rows = 0
+    padded_rows = 0
+    expected_len = len(headers)
+    for row in raw[1:]:
+        row_values = list(row)
+        if len(row_values) > expected_len:
+            row_values = row_values[:expected_len]
+            truncated_rows += 1
+        elif len(row_values) < expected_len:
+            row_values.extend([None] * (expected_len - len(row_values)))
+            padded_rows += 1
+        normalized_rows.append(row_values)
+    if truncated_rows or padded_rows:
+        logger.warning(
+            "Ajuste de columnas en hoja=%s rango=%s encabezados=%s filas_recortadas=%s filas_completadas=%s",
+            worksheet_name,
+            data_range,
+            expected_len,
+            truncated_rows,
+            padded_rows,
+        )
+    return pd.DataFrame.from_records(normalized_rows, columns=headers)
 
 
 def transform_mtto(mtto: pd.DataFrame) -> pd.DataFrame:
@@ -134,6 +157,17 @@ def truncate_columns_to_limits(dataframe: pd.DataFrame, limits: dict[str, int]) 
     return df
 
 
+def normalize_mtto_types(dataframe: pd.DataFrame) -> pd.DataFrame:
+    df = dataframe.copy()
+    for col in df.columns:
+        if pd.api.types.is_datetime64_any_dtype(df[col]):
+            df[col] = df[col].dt.strftime("%Y-%m-%d %H:%M:%S")
+            continue
+        df[col] = df[col].where(df[col].notna(), None)
+        df[col] = df[col].map(lambda value: str(value) if value is not None else None)
+    return df
+
+
 def write_mtto_table(engine, dataframe: pd.DataFrame, table_name: str) -> None:
     dtype_mtto = {
         "S.S No": VARCHAR2(50),
@@ -162,6 +196,7 @@ def write_mtto_table(engine, dataframe: pd.DataFrame, table_name: str) -> None:
         "ROBOS": VARCHAR2(50),
         "ESTADO DE INTERSECCIÓN": VARCHAR2(65),
         "Hora de registro operador": VARCHAR2(65),
+        "DISPONIBILIDAD MENSUAL": VARCHAR2(65),
         "ANIO_FUENTE": VARCHAR2(4),
     }
     typed_columns = {col: dtype_mtto[col] for col in dataframe.columns if col in dtype_mtto}
@@ -194,6 +229,7 @@ def write_mtto_table(engine, dataframe: pd.DataFrame, table_name: str) -> None:
         "DISPONIBILIDAD MENSUAL": 65,
     }
     safe_df = truncate_columns_to_limits(dataframe, text_limits)
+    safe_df = normalize_mtto_types(safe_df)
     safe_df.to_sql(
         name=table_name,
         con=engine,

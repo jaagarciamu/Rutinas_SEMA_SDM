@@ -44,6 +44,13 @@ pipelines:
     enabled: true
     args: []
 
+  - id: "07_KPI_SEMA.py"
+    script: "pipelines/07_KPI_SEMA.py"
+    interval_minutes: 720
+    offset_minutes: 90
+    enabled: true
+    args: []
+
   - id: "08_FIN_SEM_SEMA"
     script: "pipelines/08_FIN_SEM_SEMA.py"
     interval_minutes: 60

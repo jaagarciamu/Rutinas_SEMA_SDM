@@ -22,6 +22,7 @@ ALERT_LOG_PATH = LOGS_DIR / "pipeline_alerts.jsonl"
 HEARTBEATS_DIR = LOGS_DIR / "heartbeats"
 MISSED_STATE_PATH = LOGS_DIR / "missed_run_state.json"
 ALERTS_CONFIG_PATH = ROOT_DIR / "config" / "alerts.yaml"
+SHEET_CELL_MAX_CHARS = 49000
 
 
 @dataclass
@@ -91,6 +92,19 @@ def _sort_sheet_events(df: pd.DataFrame) -> pd.DataFrame:
     return sorted_df.drop(columns=["_timestamp_sort"], errors="ignore").reset_index(drop=True)
 
 
+def _prepare_sheet_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    prepared = df.copy()
+    for column in prepared.columns:
+        prepared[column] = prepared[column].map(
+            lambda value: (
+                str(value)[:SHEET_CELL_MAX_CHARS] + " [truncated]"
+                if len(str(value)) > SHEET_CELL_MAX_CHARS
+                else value
+            )
+        )
+    return prepared
+
+
 def _append_event_to_sheet_sync(event: dict[str, Any]) -> None:
     try:
         sheet_cfg = _get_sheet_client()
@@ -98,10 +112,10 @@ def _append_event_to_sheet_sync(event: dict[str, Any]) -> None:
             return
         client, sheet_url, worksheet_name = sheet_cfg
         worksheet = client.open_by_url(sheet_url).worksheet(worksheet_name)
-        df = pd.DataFrame([event])
+        df = _prepare_sheet_dataframe(pd.DataFrame([event]))
 
         raw = worksheet.get_all_values()
-        if not raw:
+        if not raw or not any(cell.strip() for cell in raw[0]):
             gd.set_with_dataframe(worksheet=worksheet, dataframe=_sort_sheet_events(df))
             return
 
