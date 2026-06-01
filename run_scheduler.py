@@ -232,6 +232,47 @@ def previous_day_is_holiday(now: datetime) -> bool:
     return previous_day in holiday_dates
 
 
+def month_weekday_is_allowed(now: datetime, month_weekday: Any, month_weekday_ordinal: Any) -> bool:
+    if month_weekday in (None, "") or month_weekday_ordinal in (None, ""):
+        return True
+
+    weekday_map = {
+        "monday": 0,
+        "tuesday": 1,
+        "wednesday": 2,
+        "thursday": 3,
+        "friday": 4,
+        "saturday": 5,
+        "sunday": 6,
+        "mon": 0,
+        "tue": 1,
+        "wed": 2,
+        "thu": 3,
+        "fri": 4,
+        "sat": 5,
+        "sun": 6,
+    }
+
+    weekday_value = str(month_weekday).strip().lower()
+    if weekday_value not in weekday_map:
+        return True
+
+    try:
+        ordinal = int(month_weekday_ordinal)
+    except (TypeError, ValueError):
+        return True
+
+    if ordinal <= 0:
+        return True
+
+    target_weekday = weekday_map[weekday_value]
+    first_day = now.replace(day=1)
+    days_ahead = (target_weekday - first_day.weekday()) % 7
+    first_occurrence = first_day + timedelta(days=days_ahead)
+    target_date = first_occurrence + timedelta(weeks=ordinal - 1)
+    return now.date() == target_date.date()
+
+
 def execute_pipeline(
     logger: logging.Logger,
     pipeline_id: str,
@@ -416,6 +457,8 @@ def main() -> int:
         interval = int(pipeline.get("interval_minutes", 60))
         offset = int(pipeline.get("offset_minutes", 0))
         weekdays = pipeline.get("weekdays", [])
+        month_weekday = pipeline.get("month_weekday")
+        month_weekday_ordinal = pipeline.get("month_weekday_ordinal")
         run_if_previous_day_holiday = bool(pipeline.get("run_if_previous_day_holiday", False))
         start_time = pipeline.get("start_time")
         end_time = pipeline.get("end_time")
@@ -431,11 +474,11 @@ def main() -> int:
         if run_if_previous_day_holiday and previous_day_is_holiday(now):
             day_allowed = True
 
-        if (
-            should_run(now, interval, offset)
-            and day_allowed
-            and time_window_is_allowed(now, start_time, end_time)
-        ):
+        month_allowed = month_weekday_is_allowed(now, month_weekday, month_weekday_ordinal)
+        has_month_rule = month_weekday is not None or month_weekday_ordinal is not None
+        run_allowed = month_allowed if has_month_rule else should_run(now, interval, offset)
+
+        if run_allowed and day_allowed and time_window_is_allowed(now, start_time, end_time):
             script = str(pipeline.get("script", ""))
             args = pipeline.get("args", [])
             if not isinstance(args, list):
@@ -467,6 +510,8 @@ def main() -> int:
                     "offset_minutes": offset,
                     "weekdays": weekdays,
                     "run_if_previous_day_holiday": run_if_previous_day_holiday,
+                    "month_weekday": month_weekday,
+                    "month_weekday_ordinal": month_weekday_ordinal,
                     "start_time": start_time,
                     "end_time": end_time,
                 },

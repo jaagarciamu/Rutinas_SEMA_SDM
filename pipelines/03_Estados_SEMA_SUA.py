@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import sys
+import unicodedata
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -121,6 +122,208 @@ def ensure_registry_columns(registro_df: pd.DataFrame) -> pd.DataFrame:
         column for column in registro.columns if column not in REQUIRED_REGISTRY_COLUMNS
     ]
     return registro[ordered_columns]
+
+
+def normalizar_columna(col: str) -> str:
+    col = "".join(
+        c for c in unicodedata.normalize("NFD", str(col))
+        if unicodedata.category(c) != "Mn"
+    )
+    col = col.lower()
+    col = re.sub(r"[^a-z0-9]+", "_", col)
+    return col.strip("_")
+
+
+def normalize_union_columns(union: pd.DataFrame) -> pd.DataFrame:
+    df = union.copy()
+    rename_map = {}
+    for col in df.columns:
+        normalized = normalizar_columna(col)
+        if normalized == "cod_id":
+            rename_map[col] = "COD_ID"
+        elif normalized == "externo":
+            rename_map[col] = "EXTERNO"
+        elif normalized == "direccion":
+            rename_map[col] = "DIRECCION"
+        elif normalized == "zona_auto":
+            rename_map[col] = "ZONA_AUTO"
+        elif normalized == "localidad":
+            rename_map[col] = "LOCALIDAD"
+        elif normalized == "equipo":
+            rename_map[col] = "EQUIPO"
+        elif normalized == "interseccion":
+            rename_map[col] = "INTERSECCION"
+        elif normalized == "operacion":
+            rename_map[col] = "OPERACION"
+        elif normalized == "num_wide":
+            rename_map[col] = "NUM_WIDE"
+        elif normalized == "num_narrow":
+            rename_map[col] = "NUM_NARROW"
+        elif normalized == "shutdown":
+            rename_map[col] = "SHUTDOWN"
+        elif normalized == "longitud":
+            rename_map[col] = "LONGITUD"
+        elif normalized == "latitud":
+            rename_map[col] = "LATITUD"
+        elif normalized == "estado":
+            rename_map[col] = "ESTADO"
+        elif normalized == "fecha":
+            rename_map[col] = "FECHA"
+        elif normalized == "causa":
+            rename_map[col] = "causa"
+        elif normalized == "id_de_solicitud":
+            rename_map[col] = "id_de_solicitud"
+        elif normalized == "estado_de_la_interseccion":
+            rename_map[col] = "estado_de_la_interseccion"
+        elif normalized == "tiempo_transcurrido":
+            rename_map[col] = "tiempo_transcurrido"
+    if rename_map:
+        df = df.rename(columns=rename_map)
+    return df
+
+
+def drop_novedad_columns(df: pd.DataFrame) -> pd.DataFrame:
+    cols_to_drop = [
+        col
+        for col in df.columns
+        if normalizar_columna(col)
+        in {
+            "causa",
+            "id_de_solicitud",
+            "estado_de_la_interseccion",
+            "tiempo_transcurrido",
+            "nei",
+            "causa_x",
+            "causa_y",
+            "id_de_solicitud_x",
+            "id_de_solicitud_y",
+            "estado_de_la_interseccion_x",
+            "estado_de_la_interseccion_y",
+            "tiempo_transcurrido_x",
+            "tiempo_transcurrido_y",
+        }
+        or col.upper().endswith(("_X", "_Y"))
+    ]
+    if cols_to_drop:
+        return df.drop(columns=cols_to_drop, errors="ignore")
+    return df
+
+
+def normalize_registro_columns(registro: pd.DataFrame) -> pd.DataFrame:
+    df = registro.copy()
+    rename_map = {}
+    for col in df.columns:
+        normalized = normalizar_columna(col)
+        if normalized == "size_in_mb":
+            rename_map[col] = "size_in_MB"
+        elif normalized == "id":
+            rename_map[col] = "id"
+        elif normalized == "name":
+            rename_map[col] = "name"
+        elif normalized == "creation":
+            rename_map[col] = "creation"
+        elif normalized == "last_modification":
+            rename_map[col] = "last_modification"
+        elif normalized == "type_of_file":
+            rename_map[col] = "type_of_file"
+        elif normalized == "date":
+            rename_map[col] = "date"
+        elif normalized == "guia":
+            rename_map[col] = "guia"
+        elif normalized == "estado":
+            rename_map[col] = "Estado"
+        elif normalized == "num":
+            rename_map[col] = "num"
+    if rename_map:
+        df = df.rename(columns=rename_map)
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    if "guia" in df.columns:
+        df["guia"] = pd.to_numeric(df["guia"], errors="coerce").astype("Int64")
+    if "num" in df.columns:
+        df["num"] = pd.to_numeric(df["num"], errors="coerce").astype("Int64")
+    return df
+
+
+def load_novedad_sheet(
+    gspread_client: gspread.Client,
+    sheet_url: str,
+    worksheet_name: str,
+    data_range: str,
+) -> pd.DataFrame:
+    worksheet = gspread_client.open_by_url(sheet_url).worksheet(worksheet_name)
+    raw = worksheet.batch_get((data_range,))[0]
+    if not raw or len(raw) < 2:
+        return pd.DataFrame()
+    novedad_sema = pd.DataFrame.from_records(raw[1:], columns=raw[0])
+    novedad_sema.columns = [normalizar_columna(col) for col in novedad_sema.columns]
+    return novedad_sema
+
+
+def enrich_union_with_novedades(union: pd.DataFrame, novedad_sema: pd.DataFrame) -> pd.DataFrame:
+    if union.empty:
+        return union
+    union = drop_novedad_columns(normalize_union_columns(union))
+    externo_col = "EXTERNO" if "EXTERNO" in union.columns else "externo" if "externo" in union.columns else None
+    if externo_col is None:
+        logger.warning("La union no contiene columna EXTERNO para cruzar novedades")
+        return union
+    if novedad_sema.empty or "nei" not in novedad_sema.columns:
+        for col in ["causa", "id_de_solicitud", "estado_de_la_interseccion", "tiempo_transcurrido"]:
+            if col not in union.columns:
+                union[col] = ""
+        return union
+
+    novedad = novedad_sema.copy()
+    if "estado_de_la_interseccion" in novedad.columns:
+        novedad = novedad[novedad["estado_de_la_interseccion"] != "EN SERVICIO"]
+
+    cols_base = [col for col in ["id", "prioridad", "nei"] if col in novedad.columns]
+    if cols_base:
+        novedad[cols_base] = novedad[cols_base].replace(r"^\s*$", pd.NA, regex=True)
+        novedad = novedad.dropna(subset=cols_base, how="all")
+
+    if "tiempo_transcurrido" in novedad.columns:
+        novedad["tiempo_transcurrido"] = pd.to_timedelta(
+            novedad["tiempo_transcurrido"],
+            errors="coerce",
+        )
+        novedad["tiempo_transcurrido"] = novedad["tiempo_transcurrido"].apply(
+            lambda x: (
+                f"{int(x.total_seconds() // 3600):02}:"
+                f"{int((x.total_seconds() % 3600) // 60):02}:"
+                f"{int(x.total_seconds() % 60):02}"
+            )
+            if pd.notna(x)
+            else None
+        )
+
+    cols_novedad = [col for col in ["nei", "causa", "id_de_solicitud", "estado_de_la_interseccion", "tiempo_transcurrido"] if col in novedad.columns]
+    if not cols_novedad:
+        return union
+
+    novedad_subset = novedad[cols_novedad].drop_duplicates(subset=["nei"], keep="last").copy()
+    novedad_subset = novedad_subset.rename(
+        columns={
+            "causa": "CAUSA",
+            "id_de_solicitud": "ID_DE_SOLICITUD",
+            "estado_de_la_interseccion": "ESTADO_DE_LA_INTERSECCION",
+            "tiempo_transcurrido": "TIEMPO_TRANSCURRIDO",
+        }
+    )
+    novedad_subset["NEI_KEY"] = novedad_subset["nei"].astype(str)
+
+    merged = union.copy()
+    merged["NEI_KEY"] = merged[externo_col].astype(str)
+    merged = merged.merge(novedad_subset, how="left", on="NEI_KEY")
+    if "NEI_KEY" in merged.columns:
+        merged = merged.drop(columns=["NEI_KEY", "nei"], errors="ignore")
+
+    merged["CAUSA"] = merged.get("CAUSA", "").fillna("")
+    merged["ID_DE_SOLICITUD"] = merged.get("ID_DE_SOLICITUD", "").fillna("")
+    merged["ESTADO_DE_LA_INTERSECCION"] = merged.get("ESTADO_DE_LA_INTERSECCION", "").fillna("EN SERVICIO")
+    merged["TIEMPO_TRANSCURRIDO"] = merged.get("TIEMPO_TRANSCURRIDO", "").fillna("")
+    return merged
 
 
 def load_registry_sheet(gspread_client: gspread.Client, sheet_url: str, worksheet_name: str) -> pd.DataFrame:
@@ -326,6 +529,10 @@ def main() -> None:
     estados_tab = os.getenv("ESTADOS_SUA_ESTADOS_WORKSHEET", "Estados").strip() or "Estados"
     drive_folder_id = require_env("ESTADOS_SUA_DRIVE_FOLDER_ID")
     max_staleness_hours = int(os.getenv("ESTADOS_SUA_MAX_STALENESS_HOURS", "24"))
+    novedades_sheet_url = os.getenv("NOVEDADES_SEMA_SHEET_URL", sheet_url).strip() or sheet_url
+    novedades_tab = os.getenv("NOVEDADES_SEMA_WORKSHEET", "UNIDADES DE TRANSITO").strip() or "UNIDADES DE TRANSITO"
+    novedades_range = os.getenv("NOVEDADES_SEMA_DATA_RANGE", "A3:N150000").strip() or "A3:N150000"
+    novedades_table = os.getenv("NOVEDADES_SEMA_ORACLE_TABLE", "noved_central_sema").strip() or "noved_central_sema"
 
     query_base = """
         SELECT COD_ID, EXTERNO, "DIRECCION CORTA", "ZONA AUTO", "LOCALIDAD",
@@ -360,6 +567,14 @@ def main() -> None:
             "LATITUD": "float64",
         }
     )
+    select_template = """SELECT * FROM EST_ACT_SEMA"""
+    actual = pd.read_sql(select_template, engine)
+    actual = normalize_union_columns(actual)
+    union = actual.copy() if not actual.empty else base.copy()
+    union = drop_novedad_columns(normalize_union_columns(union))
+    for col in ["CAUSA", "ID_DE_SOLICITUD", "ESTADO_DE_LA_INTERSECCION", "TIEMPO_TRANSCURRIDO"]:
+        if col not in union.columns:
+            union[col] = ""
 
     registro_df = load_registry_with_oracle_fallback(
         gspread_client,
@@ -368,79 +583,91 @@ def main() -> None:
         engine,
         "est_sua_reg_sema",
     )
+    registro_df = normalize_registro_columns(registro_df)
+    result_df = pd.DataFrame(columns=["ESTADO", "EXTERNO", "FECHA"])
+    registro_n = registro_df.copy()
     drive_df = list_drive_files(drive_service, drive_folder_id)
     if drive_df.empty:
-        ensure_recent_updates(registro_df, max_staleness_hours)
         logger.info("No se encontraron archivos CSV en la carpeta origen")
-        return
+    else:
+        merged = pd.merge(
+            drive_df,
+            registro_df[["id", "Estado"]],
+            left_on="id",
+            right_on="id",
+            how="left",
+        ).fillna("Pendiente")
+        pending = merged[merged["Estado"] == "Pendiente"].copy()
+        pending = pending.sort_values(by=["date"], ascending=False)
+        ids = pending["id"].tolist()
 
-    merged = pd.merge(
-        drive_df,
-        registro_df[["id", "Estado"]],
-        left_on="id",
-        right_on="id",
-        how="left",
-    ).fillna("Pendiente")
-    pending = merged[merged["Estado"] == "Pendiente"].copy()
-    pending = pending.sort_values(by=["date"], ascending=False)
-    ids = pending["id"].tolist()
+        if ids:
+            parsed_data: list[pd.DataFrame] = []
+            count_data: list[pd.DataFrame] = []
 
-    if not ids:
-        ensure_recent_updates(registro_df, max_staleness_hours)
-        logger.info("No hay registros de estados nuevos - SEMA")
-        return
+            for file_id in ids:
+                file_url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
+                response = requests.get(
+                    file_url,
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    timeout=120,
+                )
+                response.raise_for_status()
 
-    parsed_data: list[pd.DataFrame] = []
-    count_data: list[pd.DataFrame] = []
+                file_date = pending.loc[pending["id"] == file_id, "date"].iloc[0]
+                parsed = extract_states_table(response.text, file_date)
+                if parsed.empty:
+                    logger.warning("Archivo sin estados parseables id=%s", file_id)
+                    continue
 
-    for file_id in ids:
-        file_url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
-        response = requests.get(
-            file_url,
-            headers={"Authorization": f"Bearer {access_token}"},
-            timeout=120,
-        )
-        response.raise_for_status()
+                parsed_data.append(parsed)
+                count_data.append(pd.DataFrame({"id": [file_id], "num": [len(parsed["EXTERNO"])]}))
+                logger.info("Archivo procesado id=%s", file_id)
 
-        file_date = pending.loc[pending["id"] == file_id, "date"].iloc[0]
-        parsed = extract_states_table(response.text, file_date)
-        if parsed.empty:
-            logger.warning("Archivo sin estados parseables id=%s", file_id)
-            continue
+            if parsed_data:
+                result_df = pd.concat(parsed_data, axis=0).drop_duplicates()
+                result_df = result_df[result_df["EXTERNO"] != "Off"]
+                result_df["EXTERNO"] = result_df["EXTERNO"].astype(str)
+                num_reg = pd.concat(count_data, axis=0)
 
-        parsed_data.append(parsed)
-        count_data.append(pd.DataFrame({"id": [file_id], "num": [len(parsed["EXTERNO"])]}))
-        logger.info("Archivo procesado id=%s", file_id)
+                last_time = pending["date"].max()
+                ultimo = result_df[result_df["FECHA"] == last_time].copy()
+                union = pd.merge(base, ultimo, on="EXTERNO", how="left").fillna(
+                    {"ESTADO": "Operando", "FECHA": last_time}
+                )
+                union = drop_novedad_columns(normalize_union_columns(union))
+                for col in ["CAUSA", "ID_DE_SOLICITUD", "ESTADO_DE_LA_INTERSECCION", "TIEMPO_TRANSCURRIDO"]:
+                    if col not in union.columns:
+                        union[col] = ""
 
-    if not parsed_data:
-        raise DataAvailabilityError("No se lograron parsear estados desde los archivos pendientes")
+                processed_updates = pending.copy()
+                processed_updates.loc[:, "Estado"] = "Procesado"
+                processed_updates = pd.merge(
+                    processed_updates,
+                    num_reg[["id", "num"]],
+                    left_on="id",
+                    right_on="id",
+                    how="left",
+                )
+                registro_n = pd.concat([registro_df, processed_updates], ignore_index=True)
+                registro_n = normalize_registro_columns(registro_n)
+                registro_n = registro_n.sort_values(by="date", ascending=False)
 
-    result_df = pd.concat(parsed_data, axis=0).drop_duplicates()
-    result_df = result_df[result_df["EXTERNO"] != "Off"]
-    result_df["EXTERNO"] = result_df["EXTERNO"].astype(str)
-    num_reg = pd.concat(count_data, axis=0)
+                write_dataframe_to_sheet(gspread_client, sheet_url, registro_tab, registro_n)
+                write_dataframe_to_sheet(gspread_client, sheet_url, estados_tab, union)
+            else:
+                logger.info("No se lograron parsear estados desde los archivos pendientes")
+        else:
+            logger.info("No hay registros de estados nuevos - SEMA")
 
-    last_time = pending["date"].max()
-    ultimo = result_df[result_df["FECHA"] == last_time].copy()
-    union = pd.merge(base, ultimo, on="EXTERNO", how="left").fillna(
-        {"ESTADO": "Operando", "FECHA": last_time}
+    # Siempre refresca novedades, haya o no correos nuevos.
+    novedad_sema = load_novedad_sheet(
+        gspread_client,
+        novedades_sheet_url,
+        novedades_tab,
+        novedades_range,
     )
-
-    processed_updates = pending.copy()
-    processed_updates.loc[:, "Estado"] = "Procesado"
-    processed_updates = pd.merge(
-        processed_updates,
-        num_reg[["id", "num"]],
-        left_on="id",
-        right_on="id",
-        how="left",
-    )
-    registro_n = pd.concat([registro_df, processed_updates], ignore_index=True)
-    registro_n["date"] = pd.to_datetime(registro_n["date"], errors="coerce")
-    registro_n = registro_n.sort_values(by="date", ascending=False)
-
-    write_dataframe_to_sheet(gspread_client, sheet_url, registro_tab, registro_n)
-    write_dataframe_to_sheet(gspread_client, sheet_url, estados_tab, union)
+    union = enrich_union_with_novedades(union, novedad_sema)
 
     dtype_reg = {
         "size_in_MB": FLOAT,
@@ -454,6 +681,7 @@ def main() -> None:
         "Estado": VARCHAR2(50),
         "num": NUMBER,
     }
+    registro_n = normalize_registro_columns(registro_n)
     registro_n.to_sql(
         name="est_sua_reg_sema",
         con=engine,
@@ -478,7 +706,19 @@ def main() -> None:
         "LATITUD": FLOAT,
         "ESTADO": VARCHAR2(80),
         "FECHA": TIMESTAMP,
+        "CAUSA": VARCHAR2(300),
+        "ID_DE_SOLICITUD": VARCHAR2(80),
+        "ESTADO_DE_LA_INTERSECCION": VARCHAR2(80),
+        "TIEMPO_TRANSCURRIDO": VARCHAR2(20),
     }
+    union.to_sql(
+        name="est_act_sema",
+        con=engine,
+        if_exists="replace",
+        index=False,
+        dtype=dtype_act,
+    )
+
     union.to_sql(
         name="est_sua_act_sema",
         con=engine,
@@ -487,16 +727,18 @@ def main() -> None:
         dtype=dtype_act,
     )
 
-    dtype_hist = {"ESTADO": VARCHAR2(80), "EXTERNO": VARCHAR2(50), "FECHA": TIMESTAMP}
-    result_df.to_sql(
-        name="est_sua_hist_sema",
-        con=engine,
-        if_exists="append",
-        index=False,
-        dtype=dtype_hist,
-    )
-
-    logger.info("Se actualizan %s registro(s) de estados - SEMA", len(ids))
+    if not result_df.empty:
+        dtype_hist = {"ESTADO": VARCHAR2(80), "EXTERNO": VARCHAR2(50), "FECHA": TIMESTAMP}
+        result_df.to_sql(
+            name="est_sua_hist_sema",
+            con=engine,
+            if_exists="append",
+            index=False,
+            dtype=dtype_hist,
+        )
+        logger.info("Se actualizan %s registro(s) de estados - SEMA", len(ids))
+    else:
+        logger.info("Se actualiza EST_ACT_SEMA desde Oracle + novedades de sheet")
 
 
 if __name__ == "__main__":

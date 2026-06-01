@@ -61,3 +61,23 @@ pipelines:
     end_time: "20:55"
     enabled: true
     args: []
+
+  - id: "09_PRIORIDAD_SEMA"
+    script: "pipelines/09_PRIORIDAD_SEMA.py"
+    interval_minutes: 1440
+    offset_minutes: 0
+    weekdays: ["monday"]
+    start_time: "04:00"
+    enabled: true
+    args: []
+
+  - id: "10_PROMEDIOS_SEMA"
+    script: "pipelines/10_PROMEDIOS_SEMA.py"
+    interval_minutes: 5
+    offset_minutes: 0
+    weekdays: ["saturday", "sunday"]
+    start_time: "22:00"
+    end_time: "23:55"
+    timeout_minutes: 120
+    enabled: true
+    args: []
