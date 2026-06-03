@@ -1,0 +1,1 @@
+"""Graficas del dashboard."""
