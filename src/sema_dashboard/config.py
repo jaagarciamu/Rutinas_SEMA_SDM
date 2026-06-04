@@ -52,6 +52,3 @@ DEFAULT_FILTERS = {
     "zona_auto": "",
 }
 
-TEMP_FIXED_EXTERNALS = {
-    "detecciones": "1001",
-}

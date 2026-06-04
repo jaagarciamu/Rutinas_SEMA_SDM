@@ -7,6 +7,7 @@ import pydeck as pdk
 def build_inventario_map(dataset: pd.DataFrame, view_state: dict) -> pdk.Deck:
     layer = pdk.Layer(
         "ScatterplotLayer",
+        id="inventario-layer",
         data=dataset,
         get_position="[longitud, latitud]",
         get_fill_color="color_rgb",

@@ -22,4 +22,5 @@ def render_right_map_selector() -> None:
             type="primary" if is_active else "secondary"
         ):
             switch_map(map_key)
+            st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)

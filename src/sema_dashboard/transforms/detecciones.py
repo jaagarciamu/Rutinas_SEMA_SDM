@@ -95,17 +95,22 @@ def build_detecciones_dataset(
     if detecciones.empty:
         return detecciones
 
-    fecha_max = detecciones["Fecha"].max()
-    det_ult = detecciones[detecciones["Fecha"] == fecha_max].copy()
+    if "Deteccion" in detecciones.columns:
+        detecciones["Deteccion"] = pd.to_numeric(detecciones["Deteccion"], errors="coerce")
+    if "Ocupacion" in detecciones.columns:
+        detecciones["Ocupacion"] = pd.to_numeric(detecciones["Ocupacion"], errors="coerce")
 
     ocup_sensor = (
-        det_ult.groupby(["ext", "Sensor"], as_index=False)
+        detecciones.groupby(["ext", "Sensor"], as_index=False)
         .agg(Ocupacion_prom=("Ocupacion", "mean"))
     )
     ocup_ext = ocup_sensor.groupby("ext", as_index=False).agg(Ocupacion=("Ocupacion_prom", "mean"))
-    det_ext = det_ult.groupby("ext", as_index=False).agg(Detecciones=("Deteccion", "sum"))
+    det_ext = detecciones.groupby("ext", as_index=False).agg(Detecciones=("Deteccion", "sum"))
     mapa_det = det_ext.merge(ocup_ext, on="ext", how="left")
-    mapa_det["Fecha"] = fecha_max
+    fecha_min = pd.to_datetime(detecciones["Tiempo"], errors="coerce").min() if "Tiempo" in detecciones.columns else pd.NaT
+    fecha_max = pd.to_datetime(detecciones["Tiempo"], errors="coerce").max() if "Tiempo" in detecciones.columns else pd.NaT
+    mapa_det["FechaInicio"] = fecha_min
+    mapa_det["FechaFin"] = fecha_max
 
     estados = normalize_estados_frame(estados_df)
     if states_filters := filters:
@@ -121,7 +126,15 @@ def build_detecciones_dataset(
     mapa_det["categoria"] = mapa_det["Ocupacion"].apply(_classify_ocupacion)
     mapa_det["color_hex"] = mapa_det["categoria"].map(DETECCION_COLORS).fillna("#808080")
     mapa_det["color_rgb"] = mapa_det["color_hex"].map(_hex_to_rgb)
-    mapa_det["radius_value"] = np.sqrt(mapa_det["Detecciones"].clip(lower=0)).clip(lower=3) * 14
+    detecciones_scale = mapa_det["Detecciones"].clip(lower=0).fillna(0)
+    if len(detecciones_scale) > 1 and detecciones_scale.max() > detecciones_scale.min():
+        mapa_det["radius_value"] = np.interp(
+            detecciones_scale,
+            (float(detecciones_scale.min()), float(detecciones_scale.max())),
+            (18.0, 420.0),
+        )
+    else:
+        mapa_det["radius_value"] = 60.0
     mapa_det["tooltip_html"] = mapa_det.apply(
         lambda row: (
             "<b>Externo:</b> "
@@ -136,6 +149,8 @@ def build_detecciones_dataset(
             f"{_safe_value(row['Ocupacion'], '.1f')}%<br>"
             "<b>Estado:</b> "
             f"{_safe_value(row['categoria'])}<br><br>"
+            "<b>Periodo:</b> "
+            f"{_safe_value(row['FechaInicio'])} a {_safe_value(row['FechaFin'])}<br><br>"
             "<b>Equipo:</b> "
             f"{_safe_value(row['equipo'])}<br>"
             "<b>Operacion:</b> "

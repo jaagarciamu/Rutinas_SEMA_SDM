@@ -14,6 +14,14 @@ WHERE "Tiempo" >= :fecha_inicio
   AND "Tiempo" < :fecha_fin
 """
 
+DETECCIONES_QUERY_BY_EXTERNAL = """
+SELECT *
+FROM DET_RESUM_SEMA_15M
+WHERE "Tiempo" >= :fecha_inicio
+  AND "Tiempo" < :fecha_fin
+  AND ext = :externo
+"""
+
 
 def _resolve_window(fecha_inicio: date | None, fecha_fin: date | None) -> tuple[datetime, datetime]:
     end_date = fecha_fin or date.today()
@@ -24,14 +32,22 @@ def _resolve_window(fecha_inicio: date | None, fecha_fin: date | None) -> tuple[
 
 
 @st.cache_data(ttl=300, show_spinner="Cargando detecciones SEMA...")
-def fetch_detecciones(fecha_inicio: date | None = None, fecha_fin: date | None = None) -> pd.DataFrame:
+def fetch_detecciones(
+    fecha_inicio: date | None = None,
+    fecha_fin: date | None = None,
+    externo: str | None = None,
+) -> pd.DataFrame:
     start_dt, end_dt = _resolve_window(fecha_inicio, fecha_fin)
     connection = get_oracle_connection()
     try:
+        query = DETECCIONES_QUERY_BY_EXTERNAL if externo else DETECCIONES_QUERY
+        params = {"fecha_inicio": start_dt, "fecha_fin": end_dt}
+        if externo:
+            params["externo"] = str(externo)
         return pd.read_sql(
-            DETECCIONES_QUERY,
+            query,
             connection,
-            params={"fecha_inicio": start_dt, "fecha_fin": end_dt},
+            params=params,
         )
     finally:
         connection.close()
