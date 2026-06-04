@@ -5,6 +5,23 @@ import pandas as pd
 
 def apply_common_filters(df: pd.DataFrame, filters: dict) -> pd.DataFrame:
     result = df.copy()
+    fecha_inicio = filters.get("fecha_inicio")
+    fecha_fin = filters.get("fecha_fin")
+
+    if "Tiempo" in result.columns and (fecha_inicio or fecha_fin):
+        result["Tiempo"] = pd.to_datetime(result["Tiempo"], errors="coerce")
+        if fecha_inicio:
+            result = result[result["Tiempo"] >= pd.to_datetime(fecha_inicio)]
+        if fecha_fin:
+            result = result[result["Tiempo"] < (pd.to_datetime(fecha_fin) + pd.Timedelta(days=1))]
+
+    if "fecha" in result.columns and (fecha_inicio or fecha_fin):
+        fechas = pd.to_datetime(result["fecha"], errors="coerce")
+        if fecha_inicio:
+            result = result[fechas >= pd.to_datetime(fecha_inicio)]
+        if fecha_fin:
+            result = result[fechas < (pd.to_datetime(fecha_fin) + pd.Timedelta(days=1))]
+
     if "externo" in result.columns and filters.get("externo"):
         result = result[result["externo"].astype(str) == str(filters["externo"])]
     if "ext" in result.columns and filters.get("externo"):
