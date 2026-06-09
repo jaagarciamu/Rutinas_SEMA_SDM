@@ -8,8 +8,7 @@ from sema_dashboard.charts.planes_chart import build_planes_chart
 from sema_dashboard.charts.scatter_chart import build_scatter_chart
 from sema_dashboard.config import CHARTS, MATRICES
 from sema_dashboard.matrices.dia_hora_matrix import build_dia_hora_matrix
-from sema_dashboard.repositories.detecciones_repository import fetch_detecciones
-from sema_dashboard.repositories.planes_repository import fetch_planes
+from sema_dashboard.services.dashboard_data_service import get_detecciones_raw, get_planes_raw
 from sema_dashboard.state import close_overlay
 
 DIALOG_MAX_WIDTH = 588
@@ -93,6 +92,10 @@ def _selected_externo() -> str | None:
     return str(value) if value else None
 
 
+def _current_filters() -> dict:
+    return dict(st.session_state.filters)
+
+
 def _build_chart_error_message(chart_name: str, externo: str | None, exc: Exception) -> str:
     raw_message = str(exc)
     scope = f"el externo {externo}" if externo else "la red"
@@ -123,11 +126,7 @@ def _build_matrix_error_message(matrix_name: str, externo: str | None, exc: Exce
 def _render_detecciones_dialog() -> None:
     externo = _selected_externo()
     try:
-        detecciones_df = fetch_detecciones(
-            st.session_state.filters.get("fecha_inicio"),
-            st.session_state.filters.get("fecha_fin"),
-            externo,
-        )
+        detecciones_df = get_detecciones_raw(_current_filters(), externo)
         fig, config = build_detecciones_chart(detecciones_df, externo)
         _apply_dialog_theme()
         st.plotly_chart(fig, width="stretch", height=DIALOG_PLOT_HEIGHT, theme=None, config=config)
@@ -140,11 +139,7 @@ def _render_detecciones_dialog() -> None:
 def _render_ocupacion_dialog() -> None:
     externo = _selected_externo()
     try:
-        detecciones_df = fetch_detecciones(
-            st.session_state.filters.get("fecha_inicio"),
-            st.session_state.filters.get("fecha_fin"),
-            externo,
-        )
+        detecciones_df = get_detecciones_raw(_current_filters(), externo)
         fig, config = build_ocupacion_chart(detecciones_df, externo)
         _apply_dialog_theme()
         st.plotly_chart(fig, width="stretch", height=DIALOG_PLOT_HEIGHT, theme=None, config=config)
@@ -157,11 +152,7 @@ def _render_ocupacion_dialog() -> None:
 def _render_scatter_dialog() -> None:
     externo = _selected_externo()
     try:
-        detecciones_df = fetch_detecciones(
-            st.session_state.filters.get("fecha_inicio"),
-            st.session_state.filters.get("fecha_fin"),
-            externo,
-        )
+        detecciones_df = get_detecciones_raw(_current_filters(), externo)
         fig, config = build_scatter_chart(detecciones_df, externo)
         _apply_dialog_theme(max_width=540)
         st.plotly_chart(fig, width="stretch", theme=None, config=config)
@@ -179,16 +170,13 @@ def _render_planes_dialog() -> None:
         _render_close_button("close_overlay_planes_button")
         return
     try:
-        planes_df = fetch_planes(
-            st.session_state.filters.get("fecha_inicio"),
-            st.session_state.filters.get("fecha_fin"),
-            externo,
-        )
+        filters = _current_filters()
+        planes_df = get_planes_raw(filters, externo)
         fig, config = build_planes_chart(
             planes_df,
             externo,
-            st.session_state.filters.get("fecha_inicio"),
-            st.session_state.filters.get("fecha_fin"),
+            filters.get("fecha_inicio"),
+            filters.get("fecha_fin"),
         )
         _apply_dialog_theme(max_width=540)
         st.plotly_chart(fig, width="stretch", theme=None, config=config)
@@ -201,11 +189,7 @@ def _render_planes_dialog() -> None:
 def _render_dia_hora_dialog() -> None:
     externo = _selected_externo()
     try:
-        detecciones_df = fetch_detecciones(
-            st.session_state.filters.get("fecha_inicio"),
-            st.session_state.filters.get("fecha_fin"),
-            externo,
-        )
+        detecciones_df = get_detecciones_raw(_current_filters(), externo)
         fig, config = build_dia_hora_matrix(
             detecciones_df,
             externo,

@@ -9,14 +9,14 @@ from sema_dashboard.services.oracle_service import get_oracle_connection
 
 PLANES_QUERY = """
 SELECT *
-FROM PLAN_HIST_SEMA
+FROM PLAN_APP_SEMA
 WHERE \"Tiempo\" >= :fecha_inicio
   AND \"Tiempo\" < :fecha_fin
 """
 
 PLANES_QUERY_BY_EXTERNAL = """
 SELECT *
-FROM PLAN_HIST_SEMA
+FROM PLAN_APP_SEMA
 WHERE \"Tiempo\" >= :fecha_inicio
   AND \"Tiempo\" < :fecha_fin
   AND "Externo" = :externo

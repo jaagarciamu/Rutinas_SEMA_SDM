@@ -2,11 +2,63 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-import numpy as np
 import pandas as pd
 import plotly.express as px
 
 from sema_dashboard.charts.detecciones_chart import _resolve_column
+
+
+def _resolve_plan_column(hist: pd.DataFrame) -> str:
+    plan_final_column = _resolve_column(hist, "plan_Final", "Plan_Final", "PLAN_FINAL")
+    if plan_final_column is not None:
+        return plan_final_column
+
+    plan_ingresa_column = _resolve_column(hist, "Plan_ingresa", "plan_ingresa")
+    if plan_ingresa_column is not None:
+        return plan_ingresa_column
+
+    raise KeyError("plan_Final")
+
+
+def _split_segments_by_day(df: pd.DataFrame) -> pd.DataFrame:
+    segments: list[dict] = []
+
+    for row in df.itertuples(index=False):
+        current_start = row.Tiempo
+        current_end = row.Tiempo_fin
+
+        if pd.isna(current_start) or pd.isna(current_end) or current_end <= current_start:
+            continue
+
+        while current_start.normalize() != current_end.normalize():
+            day_end = current_start.normalize() + timedelta(days=1)
+            segments.append(
+                {
+                    "Plan": row.Plan,
+                    "Inicio": current_start,
+                    "Fin": day_end,
+                    "Fecha": current_start.strftime("%d/%m/%Y"),
+                }
+            )
+            current_start = day_end
+
+        segments.append(
+            {
+                "Plan": row.Plan,
+                "Inicio": current_start,
+                "Fin": current_end,
+                "Fecha": current_start.strftime("%d/%m/%Y"),
+            }
+        )
+
+    return pd.DataFrame(segments)
+
+
+def _collapse_consecutive_plans(hist: pd.DataFrame) -> pd.DataFrame:
+    hist = hist.sort_values(["Tiempo", "Referencia"]).copy()
+    hist = hist.drop_duplicates(subset=["Tiempo"], keep="last").reset_index(drop=True)
+    hist = hist[hist["Plan"].ne(hist["Plan"].shift())].reset_index(drop=True)
+    return hist
 
 
 def build_planes_chart(planes_df: pd.DataFrame, externo: str, fecha_inicio=None, fecha_fin=None):
@@ -16,18 +68,13 @@ def build_planes_chart(planes_df: pd.DataFrame, externo: str, fecha_inicio=None,
 
     ext_column = _resolve_column(hist, "Externo", "externo")
     tiempo_column = _resolve_column(hist, "Tiempo", "tiempo")
-    plan_ingresa_column = _resolve_column(hist, "Plan_ingresa", "plan_ingresa")
-    plan_finaliza_column = _resolve_column(hist, "Plan_finaliza", "plan_finaliza")
     referencia_column = _resolve_column(hist, "Referencia", "referencia")
+    plan_column = _resolve_plan_column(hist)
 
     if ext_column is None:
         raise KeyError("Externo")
     if tiempo_column is None:
         raise KeyError("Tiempo")
-    if plan_ingresa_column is None:
-        raise KeyError("Plan_ingresa")
-    if plan_finaliza_column is None:
-        raise KeyError("Plan_finaliza")
     if referencia_column is None:
         raise KeyError("Referencia")
 
@@ -35,87 +82,73 @@ def build_planes_chart(planes_df: pd.DataFrame, externo: str, fecha_inicio=None,
         columns={
             ext_column: "Externo",
             tiempo_column: "Tiempo",
-            plan_ingresa_column: "Plan_ingresa",
-            plan_finaliza_column: "Plan_finaliza",
             referencia_column: "Referencia",
+            plan_column: "Plan",
         }
     )
 
     hist["Tiempo"] = pd.to_datetime(hist["Tiempo"], errors="coerce")
     hist["Externo"] = pd.to_numeric(hist["Externo"], errors="coerce")
-    hist["Plan_ingresa"] = pd.to_numeric(hist["Plan_ingresa"], errors="coerce")
-    hist["Plan_finaliza"] = pd.to_numeric(hist["Plan_finaliza"], errors="coerce")
     hist["Referencia"] = pd.to_numeric(hist["Referencia"], errors="coerce")
-    hist = hist.dropna(subset=["Tiempo", "Externo", "Plan_ingresa", "Plan_finaliza", "Referencia"])
+    hist["Plan"] = pd.to_numeric(hist["Plan"], errors="coerce")
+    hist = hist.dropna(subset=["Tiempo", "Externo", "Referencia", "Plan"])
     hist = hist[hist["Externo"].astype(int).astype(str) == str(externo)].copy()
     if hist.empty:
         raise ValueError(f"No hay datos para el externo {externo}.")
 
-    ahora = pd.Timestamp.now().floor("S")
-    hoy = ahora.normalize()
-    planes_sel = hist.sort_values(by=["Referencia"], ascending=False).copy()
+    hist = _collapse_consecutive_plans(hist)
 
-    nuevo = planes_sel[["Referencia", "Externo", "Plan_ingresa", "Tiempo"]].reset_index(drop=True)
-    inicio = pd.DataFrame({"fecha_inicio": nuevo["Tiempo"].dt.date, "hora_inicio": nuevo["Tiempo"].dt.time})
-    nuevo = pd.concat([nuevo, inicio], axis=1)
+    now = pd.Timestamp.now().floor("s")
+    hist["Tiempo_fin"] = hist["Tiempo"].shift(-1)
 
-    ultima_fecha = planes_sel.iloc[0]["Tiempo"].normalize()
-    if ultima_fecha == hoy:
-        tiempo_fin = ahora
+    last_start = hist.iloc[-1]["Tiempo"]
+    if last_start.normalize() == now.normalize():
+        hist.loc[hist.index[-1], "Tiempo_fin"] = now
     else:
-        tiempo_fin = (
-            planes_sel.iloc[0]["Tiempo"].to_period("D").to_timestamp(how="end").round("1s")
-            - timedelta(seconds=1)
-        )
+        hist.loc[hist.index[-1], "Tiempo_fin"] = last_start.normalize() + timedelta(days=1)
 
-    add = pd.DataFrame({"Plan_finaliza": [planes_sel.iloc[0]["Plan_ingresa"]], "Tiempo": [tiempo_fin]})
-    movido = planes_sel[["Plan_finaliza", "Tiempo"]]
-    prueba = pd.concat([add, movido], ignore_index=True).set_axis(["Plan_finaliza", "Tiempo_finaliza"], axis=1)[:-1]
-    tiempos = pd.DataFrame(
-        {
-            "fecha_finaliza": prueba["Tiempo_finaliza"].dt.date,
-            "hora_finaliza": prueba["Tiempo_finaliza"].dt.time,
-        }
-    )
-    prueba = pd.concat([prueba, tiempos], axis=1)
-
-    union = pd.concat([nuevo, prueba], axis=1)
-    union["plan_Final"] = np.where(union["Plan_ingresa"] == union["Plan_finaliza"], union["Plan_ingresa"], 0)
-
-    temp_df = []
-    for row in union.itertuples(index=False):
-        if row.fecha_inicio != row.fecha_finaliza:
-            lista1 = list(row)
-            lista1[8] = lista1[4]
-            lista1[9] = "23:59:59"
-            temp_df.append(lista1)
-
-            lista2 = list(row)
-            lista2[4] = lista2[8]
-            lista2[5] = "00:00:01"
-            temp_df.append(lista2)
-        else:
-            temp_df.append(list(row))
-
-    df_planes = pd.DataFrame(temp_df, columns=union.columns)
-    df_planes["fecha_inicio"] = pd.to_datetime(df_planes["fecha_inicio"])
-    df_planes["hora_inicio"] = pd.to_datetime(df_planes["hora_inicio"], format="%H:%M:%S")
-    df_planes["fecha_finaliza"] = pd.to_datetime(df_planes["fecha_finaliza"])
-    df_planes["hora_finaliza"] = pd.to_datetime(df_planes["hora_finaliza"], format="%H:%M:%S")
-    df_planes["duracion"] = (
-        pd.Timestamp("now").normalize() + (df_planes["hora_finaliza"] - df_planes["hora_inicio"])
-    ).dt.time
+    hist = hist[hist["Tiempo_fin"] > hist["Tiempo"]].copy()
 
     if fecha_inicio is not None:
-        df_planes = df_planes[df_planes["fecha_inicio"] >= pd.to_datetime(fecha_inicio)]
-    if df_planes.empty:
+        fecha_inicio_ts = pd.to_datetime(fecha_inicio)
+        hist["Tiempo"] = hist["Tiempo"].clip(lower=fecha_inicio_ts)
+    else:
+        fecha_inicio_ts = hist["Tiempo"].min().normalize()
+
+    if fecha_fin is not None:
+        fecha_fin_ts = pd.to_datetime(fecha_fin) + pd.Timedelta(days=1)
+        hist["Tiempo_fin"] = hist["Tiempo_fin"].clip(upper=fecha_fin_ts)
+    else:
+        fecha_fin_ts = hist["Tiempo_fin"].max()
+
+    hist = hist[(hist["Tiempo_fin"] > hist["Tiempo"]) & (hist["Tiempo"] < fecha_fin_ts) & (hist["Tiempo_fin"] > fecha_inicio_ts)].copy()
+    if hist.empty:
         raise ValueError(f"No hay planes visibles para el externo {externo} en el rango seleccionado.")
 
-    df_filtrado = df_planes.copy()
-    df_filtrado["FechaInicio"] = df_filtrado["Tiempo"].dt.strftime("%d/%m/%Y %H:%M:%S")
-    df_filtrado["FechaFin"] = df_filtrado["Tiempo_finaliza"].dt.strftime("%d/%m/%Y %H:%M:%S")
-    df_filtrado["Fecha"] = df_filtrado["fecha_finaliza"].dt.strftime("%d/%m/%Y")
-    df_filtrado["plan_Final"] = df_filtrado["plan_Final"].fillna(0).astype(int).astype(str)
+    df_filtrado = _split_segments_by_day(hist)
+    if df_filtrado.empty:
+        raise ValueError(f"No hay planes visibles para el externo {externo} en el rango seleccionado.")
+
+    axis_day = pd.Timestamp("2000-01-01")
+    df_filtrado["Plan"] = df_filtrado["Plan"].astype(int).astype(str)
+    df_filtrado["HoraInicio"] = axis_day + (df_filtrado["Inicio"] - df_filtrado["Inicio"].dt.normalize())
+    df_filtrado["HoraFin"] = axis_day + (df_filtrado["Fin"] - df_filtrado["Fin"].dt.normalize())
+    midnight_mask = (
+        df_filtrado["Fin"].dt.time == pd.Timestamp("00:00:00").time()
+    ) & (df_filtrado["Fin"].dt.normalize() > df_filtrado["Inicio"].dt.normalize())
+    df_filtrado.loc[midnight_mask, "HoraFin"] = axis_day + pd.Timedelta(days=1)
+    df_filtrado["FechaInicio"] = df_filtrado["Inicio"].dt.strftime("%d/%m/%Y %H:%M:%S")
+    df_filtrado["FechaFin"] = df_filtrado["Fin"].dt.strftime("%d/%m/%Y %H:%M:%S")
+    df_filtrado["duracion"] = (df_filtrado["Fin"] - df_filtrado["Inicio"]).dt.total_seconds().clip(lower=0)
+    df_filtrado["duracion"] = pd.to_timedelta(df_filtrado["duracion"], unit="s").astype(str)
+    fechas_descendentes = sorted(
+        df_filtrado["Fecha"].unique().tolist(),
+        key=lambda item: pd.to_datetime(item, format="%d/%m/%Y"),
+        reverse=True,
+    )
+    fecha_posicion = {fecha: len(fechas_descendentes) - index for index, fecha in enumerate(fechas_descendentes)}
+    df_filtrado["FechaPos"] = df_filtrado["Fecha"].map(fecha_posicion).astype(float)
+    df_filtrado = df_filtrado.sort_values(["FechaPos", "HoraInicio"]).copy()
 
     color_map = {
         "1": "#00FF00",
@@ -128,23 +161,34 @@ def build_planes_chart(planes_df: pd.DataFrame, externo: str, fecha_inicio=None,
         "8": "#FF00FF",
         "9": "#00FFFF",
         "10": "#FFFFFF",
+        "11": "#1E90FF",
+        "12": "#32CD32",
+        "13": "#FF1493",
+        "14": "#FF5A3D",
+        "15": "#FFD166",
+        "16": "#06D6A0",
+        "17": "#A970FF",
+        "18": "#118AB2",
+        "19": "#EF476F",
+        "20": "#F4A261",
         "0": "#444444",
     }
 
     fig = px.timeline(
         df_filtrado,
-        x_start="hora_inicio",
-        x_end="hora_finaliza",
-        y="Fecha",
-        color="plan_Final",
-        text="plan_Final",
+        x_start="HoraInicio",
+        x_end="HoraFin",
+        y="FechaPos",
+        color="Plan",
+        text="Plan",
         color_discrete_map=color_map,
         hover_data={
             "FechaInicio": True,
             "FechaFin": True,
             "duracion": True,
-            "hora_inicio": False,
-            "hora_finaliza": False,
+            "HoraInicio": False,
+            "HoraFin": False,
+            "FechaPos": False,
             "Fecha": False,
         },
     )
@@ -168,7 +212,8 @@ def build_planes_chart(planes_df: pd.DataFrame, externo: str, fecha_inicio=None,
         template="plotly_dark",
         height=520,
         paper_bgcolor="#111111",
-        plot_bgcolor="#111111",        title=dict(
+        plot_bgcolor="#111111",
+        title=dict(
             text=(
                 "Planes Semafóricos<br>"
                 f"<span style='font-size:0.72em;'>Externo {externo}</span><br>"
@@ -193,6 +238,7 @@ def build_planes_chart(planes_df: pd.DataFrame, externo: str, fecha_inicio=None,
         showgrid=True,
         gridcolor="#333333",
         tickformat="%H:%M",
+        range=[axis_day, axis_day + pd.Timedelta(days=1)],
         zeroline=False,
     )
     fig.update_yaxes(
@@ -200,7 +246,10 @@ def build_planes_chart(planes_df: pd.DataFrame, externo: str, fecha_inicio=None,
         tickfont=dict(size=10),
         showgrid=True,
         gridcolor="#333333",
-        autorange="reversed",
+        tickmode="array",
+        tickvals=[fecha_posicion[fecha] for fecha in fechas_descendentes],
+        ticktext=fechas_descendentes,
+        range=[0.5, len(fechas_descendentes) + 0.5],
         zeroline=False,
     )
 

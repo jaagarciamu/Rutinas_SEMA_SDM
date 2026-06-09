@@ -54,14 +54,6 @@ def render_left_filters() -> None:
         key="filter_acceso_widget",
     )
 
-    sensor = st.selectbox(
-        "Sensor",
-        options=options["sensor"],
-        index=options["sensor"].index(st.session_state.filters.get("sensor", "")),
-        format_func=_format_option,
-        key="filter_sensor_widget",
-    )
-
     zona_auto = st.selectbox(
         "Zona automatica",
         options=options["zona_auto"],
@@ -72,5 +64,4 @@ def render_left_filters() -> None:
 
     update_filter("externo", externo)
     update_filter("acceso", acceso)
-    update_filter("sensor", sensor)
     update_filter("zona_auto", zona_auto)

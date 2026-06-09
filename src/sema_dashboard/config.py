@@ -48,7 +48,5 @@ DEFAULT_FILTERS = {
     "fecha_fin": None,
     "externo": "",
     "acceso": "",
-    "sensor": "",
     "zona_auto": "",
 }
-

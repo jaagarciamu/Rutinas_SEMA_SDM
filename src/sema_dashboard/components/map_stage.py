@@ -11,11 +11,10 @@ from sema_dashboard.maps.detecciones_map import build_detecciones_map
 from sema_dashboard.maps.estados_map import build_estados_map
 from sema_dashboard.maps.inventario_map import build_inventario_map
 from sema_dashboard.maps.novedades_map import build_novedades_map
-from sema_dashboard.repositories.detecciones_repository import fetch_detecciones
 from sema_dashboard.repositories.estados_repository import fetch_estados
 from sema_dashboard.repositories.inventario_repository import fetch_inventario
 from sema_dashboard.repositories.novedades_repository import fetch_novedades
-from sema_dashboard.transforms.detecciones import build_detecciones_dataset
+from sema_dashboard.services.dashboard_data_service import get_detecciones_map_dataset
 from sema_dashboard.transforms.estados import build_estados_dataset
 from sema_dashboard.transforms.inventario import build_inventario_dataset
 from sema_dashboard.transforms.novedades import build_novedades_dataset
@@ -23,8 +22,8 @@ from sema_dashboard.ui.interactions import update_filter
 
 
 def render_map_stage() -> None:
-
     mapa_actual = st.session_state.active_map
+    filters = dict(st.session_state.filters)
 
     titulos = {
         "inventario": "Mapa Sistema Semaforización Inteligente",
@@ -52,7 +51,7 @@ def render_map_stage() -> None:
         unsafe_allow_html=True
     )
 
-    deck, selection_dataset, external_column = _build_current_map()
+    deck, selection_dataset, external_column = _build_current_map(filters)
 
     event = st.pydeck_chart(
         deck,
@@ -65,7 +64,7 @@ def render_map_stage() -> None:
 
     _sync_map_selection(event, selection_dataset, external_column)
 
-    _render_map_overlays()
+    _render_map_overlays(filters)
 
     if mapa_actual == "novedades":
         _render_novedades_bottom_panels()
@@ -76,13 +75,13 @@ def render_map_stage() -> None:
     )
 
 
-def _build_current_map() -> tuple[pdk.Deck, pd.DataFrame, str | None]:
+def _build_current_map(filters: dict) -> tuple[pdk.Deck, pd.DataFrame, str | None]:
     try:
         if st.session_state.active_map == "inventario":
             inventario_raw = fetch_inventario()
             inventario = build_inventario_dataset(
                 inventario_raw,
-                st.session_state.filters,
+                filters,
             )
             if inventario.empty:
                 st.info("No hay intersecciones para los filtros actuales.")
@@ -90,16 +89,7 @@ def _build_current_map() -> tuple[pdk.Deck, pd.DataFrame, str | None]:
             return build_inventario_map(inventario, st.session_state.map_view_state), inventario.reset_index(drop=True), "externo"
 
         if st.session_state.active_map == "detecciones":
-            detecciones_raw = fetch_detecciones(
-                st.session_state.filters.get("fecha_inicio"),
-                st.session_state.filters.get("fecha_fin"),
-            )
-            estados_raw = fetch_estados()
-            detecciones = build_detecciones_dataset(
-                detecciones_raw,
-                estados_raw,
-                st.session_state.filters,
-            )
+            detecciones = get_detecciones_map_dataset(filters)
             if detecciones.empty:
                 st.info("No hay detecciones para los filtros actuales.")
                 return _build_empty_map(), pd.DataFrame(), None
@@ -107,7 +97,7 @@ def _build_current_map() -> tuple[pdk.Deck, pd.DataFrame, str | None]:
 
         if st.session_state.active_map == "estados":
             estados_raw = fetch_estados()
-            estados = build_estados_dataset(estados_raw, st.session_state.filters)
+            estados = build_estados_dataset(estados_raw, filters)
             if estados.empty:
                 st.info("No hay estados para los filtros actuales.")
                 return _build_empty_map(), pd.DataFrame(), None
@@ -115,7 +105,7 @@ def _build_current_map() -> tuple[pdk.Deck, pd.DataFrame, str | None]:
 
         if st.session_state.active_map == "novedades":
             novedades_raw = fetch_novedades()
-            novedades = build_novedades_dataset(novedades_raw, st.session_state.filters)
+            novedades = build_novedades_dataset(novedades_raw, filters)
             if novedades.empty:
                 st.info("No hay novedades para los filtros actuales.")
                 return _build_empty_map(), pd.DataFrame(), None
@@ -201,11 +191,11 @@ def _sync_map_selection(event: object, dataset: pd.DataFrame, external_column: s
         st.rerun()
 
 
-def _render_map_overlays() -> None:
+def _render_map_overlays(filters: dict) -> None:
     active_map = st.session_state.active_map
     if active_map == "inventario":
         inventario_raw = fetch_inventario()
-        dataset = build_inventario_dataset(inventario_raw, st.session_state.filters)
+        dataset = build_inventario_dataset(inventario_raw, filters)
         if dataset.empty:
             return
         total_inter = len(dataset)
@@ -230,12 +220,7 @@ def _render_map_overlays() -> None:
         return
 
     if active_map == "detecciones":
-        detecciones_raw = fetch_detecciones(
-            st.session_state.filters.get("fecha_inicio"),
-            st.session_state.filters.get("fecha_fin"),
-        )
-        estados_raw = fetch_estados()
-        dataset = build_detecciones_dataset(detecciones_raw, estados_raw, st.session_state.filters)
+        dataset = get_detecciones_map_dataset(filters)
         if dataset.empty:
             return
         legend_html = _legend_items_html(
@@ -266,7 +251,7 @@ def _render_map_overlays() -> None:
 
     if active_map == "estados":
         estados_raw = fetch_estados()
-        dataset = build_estados_dataset(estados_raw, st.session_state.filters)
+        dataset = build_estados_dataset(estados_raw, filters)
         if dataset.empty:
             return
         legend_html = _legend_items_html(
@@ -302,7 +287,7 @@ def _render_map_overlays() -> None:
 
     if active_map == "novedades":
         novedades_raw = fetch_novedades()
-        dataset = build_novedades_dataset(novedades_raw, st.session_state.filters)
+        dataset = build_novedades_dataset(novedades_raw, filters)
         if dataset.empty:
             return
         legend_html = _legend_items_html(

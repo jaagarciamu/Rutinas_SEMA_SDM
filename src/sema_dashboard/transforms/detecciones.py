@@ -62,7 +62,7 @@ def build_detecciones_dataset(
     detecciones = detecciones_df.copy()
     detecciones.columns = [str(column).strip() for column in detecciones.columns]
     ext_column = _resolve_column(detecciones, "ext", "est", "EXT", "EST")
-    sensor_column = _resolve_column(detecciones, "Sensor", "sensor")
+    acceso_column = _resolve_column(detecciones, "Acceso", "acceso")
     deteccion_column = _resolve_column(detecciones, "Deteccion", "deteccion")
     ocupacion_column = _resolve_column(detecciones, "Ocupacion", "ocupacion")
     fecha_column = _resolve_column(detecciones, "Fecha", "fecha")
@@ -70,10 +70,11 @@ def build_detecciones_dataset(
 
     if ext_column is None:
         raise KeyError("ext")
+    if acceso_column is None:
+        raise KeyError("Acceso")
 
     rename_map = {ext_column: "ext"}
-    if sensor_column is not None:
-        rename_map[sensor_column] = "Sensor"
+    rename_map[acceso_column] = "Acceso"
     if deteccion_column is not None:
         rename_map[deteccion_column] = "Deteccion"
     if ocupacion_column is not None:
@@ -89,6 +90,7 @@ def build_detecciones_dataset(
     if "Fecha" not in detecciones.columns and "Tiempo" in detecciones.columns:
         detecciones["Fecha"] = detecciones["Tiempo"].dt.date
     detecciones["ext"] = detecciones["ext"].astype(str)
+    detecciones["Acceso"] = detecciones["Acceso"].astype(str)
 
     if filters:
         detecciones = apply_common_filters(detecciones, filters)
@@ -100,11 +102,7 @@ def build_detecciones_dataset(
     if "Ocupacion" in detecciones.columns:
         detecciones["Ocupacion"] = pd.to_numeric(detecciones["Ocupacion"], errors="coerce")
 
-    ocup_sensor = (
-        detecciones.groupby(["ext", "Sensor"], as_index=False)
-        .agg(Ocupacion_prom=("Ocupacion", "mean"))
-    )
-    ocup_ext = ocup_sensor.groupby("ext", as_index=False).agg(Ocupacion=("Ocupacion_prom", "mean"))
+    ocup_ext = detecciones.groupby("ext", as_index=False).agg(Ocupacion=("Ocupacion", "mean"))
     det_ext = detecciones.groupby("ext", as_index=False).agg(Detecciones=("Deteccion", "sum"))
     mapa_det = det_ext.merge(ocup_ext, on="ext", how="left")
     fecha_min = pd.to_datetime(detecciones["Tiempo"], errors="coerce").min() if "Tiempo" in detecciones.columns else pd.NaT

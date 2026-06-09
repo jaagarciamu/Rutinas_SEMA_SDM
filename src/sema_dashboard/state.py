@@ -21,6 +21,11 @@ def initialize_state() -> None:
         if key not in st.session_state:
             st.session_state[key] = value
 
+    if isinstance(st.session_state.get("filters"), dict) and "sensor" in st.session_state.filters:
+        filters = dict(st.session_state.filters)
+        filters.pop("sensor", None)
+        st.session_state.filters = filters
+
 
 def switch_map(map_key: str) -> None:
     st.session_state.active_map = map_key
