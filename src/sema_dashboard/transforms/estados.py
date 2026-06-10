@@ -118,11 +118,10 @@ def build_estados_dataset(df: pd.DataFrame, filters: dict | None = None) -> pd.D
         return dataset
 
     dataset = dataset.dropna(subset=["latitud", "longitud"]).copy()
-    if filters:
-        dataset = apply_common_filters(dataset, filters)
-
     dataset["estado"] = dataset["estado"].apply(_normalize_estado)
     dataset = dataset[dataset["estado"].notna()].copy()
+    if filters:
+        dataset = apply_common_filters(dataset, filters)
     if dataset.empty:
         return dataset
 

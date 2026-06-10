@@ -6,6 +6,7 @@ from sema_dashboard.charts.detecciones_chart import build_detecciones_chart
 from sema_dashboard.charts.ocupacion_chart import build_ocupacion_chart
 from sema_dashboard.charts.planes_chart import build_planes_chart
 from sema_dashboard.charts.scatter_chart import build_scatter_chart
+from sema_dashboard.components.externo_sheet import render_ficha_tecnica_content
 from sema_dashboard.config import CHARTS, MATRICES
 from sema_dashboard.matrices.dia_hora_matrix import build_dia_hora_matrix
 from sema_dashboard.services.dashboard_data_service import get_detecciones_raw, get_planes_raw
@@ -34,12 +35,18 @@ def render_overlay() -> None:
             _render_planes_dialog()
             return
         title = CHARTS.get(key, "Grafica")
-    else:
+    elif st.session_state.overlay_type == "matrix":
         key = st.session_state.overlay_key
         if key == "dia_hora":
             _render_dia_hora_dialog()
             return
         title = MATRICES.get(key, "Matriz")
+    else:
+        key = st.session_state.overlay_key
+        if key == "tecnica":
+            _render_ficha_dialog()
+            return
+        title = "Ficha"
 
     st.markdown(
         f"""
@@ -88,7 +95,7 @@ def _render_close_button(key: str) -> None:
 
 
 def _selected_externo() -> str | None:
-    value = st.session_state.filters.get("externo", "")
+    value = st.session_state.filters.get("externo", "") or st.session_state.selected_externo
     return str(value) if value else None
 
 
@@ -201,3 +208,11 @@ def _render_dia_hora_dialog() -> None:
     except Exception as exc:
         st.error(_build_matrix_error_message("Matriz Dia x Hora", externo, exc))
     _render_close_button("close_overlay_dia_hora_button")
+
+
+@st.dialog("Ficha tecnica", width="large", dismissible=True, on_dismiss=_dismiss_dialog)
+def _render_ficha_dialog() -> None:
+    externo = _selected_externo()
+    _apply_dialog_theme(max_width=740)
+    render_ficha_tecnica_content(externo)
+    _render_close_button("close_overlay_ficha_button")

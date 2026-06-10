@@ -3,7 +3,6 @@ from __future__ import annotations
 import streamlit as st
 
 from sema_dashboard.components.base import render_shell
-from sema_dashboard.components.externo_sheet import render_externo_sheet
 from sema_dashboard.components.left_filters import render_left_filters
 from sema_dashboard.components.left_links import render_left_links
 from sema_dashboard.components.logo_panel import render_logo_panel
@@ -12,6 +11,7 @@ from sema_dashboard.components.overlay import render_overlay
 from sema_dashboard.components.right_chart_toolbar import render_right_chart_toolbar
 from sema_dashboard.components.right_map_selector import render_right_map_selector
 from sema_dashboard.components.right_matrix_toolbar import render_right_matrix_toolbar
+from sema_dashboard.components.right_sheet_toolbar import render_right_sheet_toolbar
 from sema_dashboard.components.top_bar import render_top_bar
 
 
@@ -35,7 +35,6 @@ def render_app() -> None:
         render_right_map_selector()
         render_right_chart_toolbar()
         render_right_matrix_toolbar()
+        render_right_sheet_toolbar()
 
     render_overlay()
-    render_externo_sheet()
-

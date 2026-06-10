@@ -14,7 +14,6 @@ def initialize_state() -> None:
         "overlay_open": False,
         "overlay_type": None,
         "overlay_key": None,
-        "externo_sheet_open": False,
         "map_view_state": {"latitude": 4.65, "longitude": -74.1, "zoom": 11.2},
     }
     for key, value in defaults.items():
@@ -34,7 +33,6 @@ def switch_map(map_key: str) -> None:
     st.session_state.overlay_key = None
     st.session_state.selected_externo = None
     st.session_state.selected_feature_count = 0
-    st.session_state.externo_sheet_open = False
 
 
 def open_overlay(overlay_type: str, overlay_key: str) -> None:

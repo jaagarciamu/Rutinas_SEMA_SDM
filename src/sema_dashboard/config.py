@@ -47,6 +47,9 @@ DEFAULT_FILTERS = {
     "fecha_inicio": None,
     "fecha_fin": None,
     "externo": "",
+    "direccion": "",
     "acceso": "",
     "zona_auto": "",
+    "estado_concert": "",
+    "gestion_sema": "",
 }

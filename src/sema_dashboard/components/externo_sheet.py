@@ -8,75 +8,80 @@ import streamlit as st
 from sema_dashboard.repositories.inventario_repository import fetch_inventario
 from sema_dashboard.transforms.inventario import build_inventario_dataset
 
+LEFT_FIELDS = [
+    ("Direccion corta", "DIRECCION CORTA"),
+    ("Localidad", "localidad"),
+    ("Zona planeamiento", "ZONA PLANEAMIENTO"),
+    ("Zona automatica", "ZONA AUTO"),
+    ("Referencia equipo", "REFERENCIA EQUIPO"),
+    ("Fecha instalacion", "FECHA DE INSTALACION"),
+    ("Operacion actual", "OPERACION ACTUAL"),
+]
 
-def render_externo_sheet() -> None:
-    if st.session_state.active_map != "inventario":
-        return
+RIGHT_FIELDS = [
+    ("Tipo interseccion", "TIPO DE INTERSECCION"),
+    ("Grupos vehiculares", "Grupos Vehiculares"),
+    ("Grupos peatonales", "Grupos Peatonales"),
+    ("Wide", "Wide"),
+    ("Narrow", "Narrow"),
+    ("Shutdown", "Shut Down"),
+    ("Prioridad atencion", "PRIORIDAD DE ATENCION"),
+]
 
-    externo = st.session_state.filters.get("externo", "") or st.session_state.selected_externo
-    if not externo:
-        _render_placeholder()
-        return
+LINK_FIELDS = [
+    ("Config VD", "LINK CONFIG VD"),
+    ("DATEM", "LINK DATEM"),
+    ("Esquemas", "LINK ESQUEMAS"),
+    ("Repositorio", "LINK REPOSITORIO"),
+    ("Automatico", "LINK AUTOMATICO"),
+]
+
+
+def get_ficha_tecnica_row(externo: str | None) -> tuple[str | None, pd.Series | None]:
+    selected = str(externo).strip() if externo is not None else ""
+    if not selected:
+        return None, None
 
     inventario_raw = fetch_inventario()
     inventario = build_inventario_dataset(inventario_raw, filters=None)
-    ficha = inventario[inventario["externo"].astype(str) == str(externo)].copy()
+    ficha = inventario[inventario["externo"].astype(str) == selected].copy()
     if ficha.empty:
-        _render_placeholder(f"No se encontró información para el externo {externo}.")
+        return selected, None
+    return selected, ficha.iloc[0]
+
+
+def render_ficha_tecnica_content(externo: str | None) -> None:
+    selected, row = get_ficha_tecnica_row(externo)
+    if not selected:
+        st.info("Selecciona un externo en el mapa o en el filtro para activar la ficha.")
+        return
+    if row is None:
+        st.warning(f"No se encontro informacion para el externo {selected}.")
         return
 
-    row = ficha.iloc[0]
-    st.session_state.selected_externo = str(externo)
-    st.session_state.externo_sheet_open = True
-
-    st.caption("FICHA TÉCNICA")
-    st.subheader(f"Externo {externo}")
-
+    st.subheader(f"Externo {selected}")
     info_col, links_col = st.columns([2.4, 1.0], gap="large")
 
     with info_col:
         left_col, right_col = st.columns(2, gap="medium")
-        left_fields = [
-            ("Dirección corta", _safe_value(row, "DIRECCION CORTA")),
-            ("Localidad", _safe_value(row, "localidad")),
-            ("Zona planeamiento", _safe_value(row, "ZONA PLANEAMIENTO")),
-            ("Zona automática", _safe_value(row, "ZONA AUTO")),
-            ("Referencia equipo", _safe_value(row, "REFERENCIA EQUIPO")),
-            ("Fecha instalación", _safe_value(row, "FECHA DE INSTALACION")),
-            ("Operación actual", _safe_value(row, "OPERACION ACTUAL")),
-        ]
-        right_fields = [
-            ("Tipo intersección", _safe_value(row, "TIPO DE INTERSECCION")),
-            ("Grupos vehiculares", _safe_value(row, "Grupos Vehiculares")),
-            ("Grupos peatonales", _safe_value(row, "Grupos Peatonales")),
-            ("Wide", _safe_value(row, "Wide")),
-            ("Narrow", _safe_value(row, "Narrow")),
-            ("Shutdown", _safe_value(row, "Shut Down")),
-            ("Prioridad atención", _safe_value(row, "PRIORIDAD DE ATENCION")),
-        ]
-
         with left_col:
-            _render_field_group(left_fields)
+            _render_field_group(row, LEFT_FIELDS)
         with right_col:
-            _render_field_group(right_fields)
+            _render_field_group(row, RIGHT_FIELDS)
 
     with links_col:
-        st.markdown("**Enlaces**")
-        _render_link("Config VD", row.get("LINK CONFIG VD"))
-        _render_link("DATEM", row.get("LINK DATEM"))
-        _render_link("Esquemas", row.get("LINK ESQUEMAS"))
-        _render_link("Repositorio", row.get("LINK REPOSITORIO"))
-        _render_link("Automático", row.get("LINK AUTOMATICO"))
+        st.caption("ENLACES")
+        for label, column in LINK_FIELDS:
+            _render_link(label, row.get(column))
 
 
-def _render_field_group(fields: list[tuple[str, str]]) -> None:
-    for label, value in fields:
+def _render_field_group(row: pd.Series, fields: list[tuple[str, str]]) -> None:
+    for label, column in fields:
         st.caption(label.upper())
-        st.markdown(value)
+        st.write(_safe_value(row.get(column)))
 
 
-def _safe_value(row: pd.Series, column: str) -> str:
-    value = row.get(column)
+def _safe_value(value: object) -> str:
     if pd.isna(value):
         return "-"
     if isinstance(value, pd.Timestamp):
@@ -91,21 +96,4 @@ def _render_link(label: str, value: object) -> None:
     if pd.isna(value) or not str(value).strip():
         st.caption(f"{label}: sin enlace")
         return
-    st.markdown(
-        """
-        <style>
-        div[data-testid="stLinkButton"] a {
-            font-size: 1rem !important;
-            font-weight: 500 !important;
-            line-height: 1.3 !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
     st.link_button(label, str(value).strip(), use_container_width=True)
-
-
-def _render_placeholder(message: str | None = None) -> None:
-    st.caption("FICHA TÉCNICA")
-    st.info(message or "Selecciona un externo en el mapa o en el filtro para activar la ficha.")

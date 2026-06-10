@@ -15,7 +15,7 @@ def build_novedades_map(dataset: pd.DataFrame, view_state: dict) -> pdk.Deck:
         pickable=True,
         stroked=True,
         filled=True,
-        radius_min_pixels=3,
+        radius_min_pixels=2,
         radius_max_pixels=18,
         line_width_min_pixels=1,
         get_line_color=[255, 255, 255, 160],

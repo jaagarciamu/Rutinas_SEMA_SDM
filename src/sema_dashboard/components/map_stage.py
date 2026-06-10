@@ -186,7 +186,6 @@ def _sync_map_selection(event: object, dataset: pd.DataFrame, external_column: s
     current = st.session_state.filters.get("externo", "")
     if externo and current != externo:
         st.session_state.selected_externo = externo
-        st.session_state.externo_sheet_open = st.session_state.active_map == "inventario"
         update_filter("externo", externo)
         st.rerun()
 
@@ -297,11 +296,13 @@ def _render_map_overlays(filters: dict) -> None:
                 ("APAGADA", "#C44E7A"),
                 ("INTERMITENTE", "#9BBB59"),
                 ("MANTENIMIENTO", "#FF8C00"),
+                ("EN PMT", "#0D3B66"),
             ]
         )
         incidentes = dataset[
             dataset["id_de_solicitud"].notna() & (dataset["id_de_solicitud"].astype(str).str.strip() != "")
         ].copy()
+        incidentes = incidentes[incidentes["estado_de_la_interseccion"] != "EN PMT"].copy()
         if len(incidentes) > 0:
             horas = pd.to_timedelta(incidentes["tiempo_transcurrido"], errors="coerce").dt.total_seconds() / 3600
             promedio_atencion = horas.mean()
@@ -313,13 +314,13 @@ def _render_map_overlays(filters: dict) -> None:
             f"Incidentes activos : {len(incidentes)}<br><br>"
             f"Promedio atencion : {promedio_atencion:.1f} h<br><br>"
         )
-        for est in ["EN SERVICIO", "AISLADA", "INTERMITENTE", "APAGADA", "MANTENIMIENTO"]:
+        for est in ["EN SERVICIO", "AISLADA", "INTERMITENTE", "APAGADA", "MANTENIMIENTO", "EN PMT"]:
             if est in estado_count:
                 resumen += f"{est}: {estado_count[est]}<br>"
         _render_overlay_boxes(
             legend_title="Estado Interseccion",
             legend_html=legend_html,
-            legend_bottom="238px",
+            legend_bottom="250px",
             info_html=resumen,
             info_bottom="34px",
             info_align="left",
@@ -396,21 +397,18 @@ def _render_novedades_bottom_panels() -> None:
     if dataset.empty:
         return
 
-    incidentes = dataset[dataset["tiempo_transcurrido"].notna()].copy()
-    if incidentes.empty:
-        return
+    novedades_visibles = dataset[dataset["estado_de_la_interseccion"] != "EN SERVICIO"].copy()
+    intermitentes_svg = _build_novedades_semicircle_intermitente_svg(novedades_visibles)
 
+    incidentes = dataset[dataset["tiempo_transcurrido"].notna()].copy()
+    incidentes = incidentes[incidentes["estado_de_la_interseccion"] != "EN PMT"].copy()
     incidentes["horas_atencion"] = (
         pd.to_timedelta(incidentes["tiempo_transcurrido"], errors="coerce")
         .dt.total_seconds()
         / 3600
     )
     incidentes = incidentes[incidentes["horas_atencion"].notna()].copy()
-    if incidentes.empty:
-        return
-
-    donut_svg = _build_novedades_donut_svg(incidentes)
-    barras_svg = _build_novedades_barras_svg(incidentes)
+    duracion_svg = _build_novedades_semicircle_duracion_svg(incidentes)
 
     st.markdown(
         f"""
@@ -429,7 +427,7 @@ def _render_novedades_bottom_panels() -> None:
                 box-shadow:0 6px 20px rgba(0,0,0,0.35);
                 overflow:hidden;
             ">
-                {donut_svg}
+                {intermitentes_svg}
             </div>
             <div style="
                 position:absolute;
@@ -445,7 +443,7 @@ def _render_novedades_bottom_panels() -> None:
                 box-shadow:0 6px 20px rgba(0,0,0,0.35);
                 overflow:hidden;
             ">
-                {barras_svg}
+                {duracion_svg}
             </div>
         </div>
         """,
@@ -453,114 +451,92 @@ def _render_novedades_bottom_panels() -> None:
     )
 
 
-def _build_novedades_donut_svg(incidentes: pd.DataFrame) -> str:
-    donut_df = incidentes.copy()
-    donut_df["grupo_tiempo"] = pd.cut(
-        donut_df["horas_atencion"],
-        bins=[0, 1, 3, 5, float("inf")],
-        labels=["<1 hora", "1-3 horas", "3-5 horas", ">5 horas"],
-        include_lowest=True,
+def _build_novedades_semicircle_intermitente_svg(novedades: pd.DataFrame) -> str:
+    total = int(len(novedades))
+    apagadas_intermitentes = int(
+        novedades["estado_de_la_interseccion"].isin(["APAGADA", "INTERMITENTE"]).sum()
     )
-    resumen = (
-        donut_df["grupo_tiempo"]
-        .value_counts()
-        .reindex(["<1 hora", "1-3 horas", "3-5 horas", ">5 horas"], fill_value=0)
+    return _build_semicircle_svg(
+        title_lines=["Intersecciones apagadas e", "Intermitentes"],
+        value=apagadas_intermitentes,
+        max_value=total,
+        active_color="#FF5A5F",
+        center_text=f"{apagadas_intermitentes}",
+        footer_text=None,
+        value_format="int",
     )
-    color_tiempo = {
-        "<1 hora": "#00FF66",
-        "1-3 horas": "#FFD700",
-        "3-5 horas": "#FF8C00",
-        ">5 horas": "#FF3333",
-    }
-    total = int(resumen.sum())
-    if total <= 0:
-        return "<div style='font-size:12px;color:white;'>Sin datos</div>"
 
-    cx, cy = 72, 80
-    radius = 42
-    stroke = 16
-    circumference = 2 * math.pi * radius
-    offset = 0.0
-    segments = []
-    for label, value in resumen.items():
-        if int(value) <= 0:
-            continue
-        fraction = float(value) / total
-        seg_length = circumference * fraction
-        segments.append(
-            f'<circle cx="{cx}" cy="{cy}" r="{radius}" fill="none" '
-            f'stroke="{color_tiempo[label]}" stroke-width="{stroke}" '
-            f'stroke-dasharray="{seg_length:.2f} {circumference - seg_length:.2f}" '
-            f'stroke-dashoffset="{-offset:.2f}" transform="rotate(-90 {cx} {cy})" />'
-        )
-        offset += seg_length
 
-    legend_rows = []
-    legend_y = 38
-    for label, value in resumen.items():
-        if int(value) <= 0:
-            continue
-        legend_rows.append(
-            f'<circle cx="146" cy="{legend_y}" r="4" fill="{color_tiempo[label]}" />'
-            f'<text x="156" y="{legend_y + 3}" fill="white" font-size="9">{html.escape(str(label))}</text>'
-            f'<text x="204" y="{legend_y + 3}" fill="#d8d8d8" font-size="9" text-anchor="end">{int(value)}</text>'
+def _build_novedades_semicircle_duracion_svg(incidentes: pd.DataFrame) -> str:
+    if incidentes.empty:
+        promedio_horas = 0.0
+        horas_totales = 0.0
+    else:
+        promedio_horas = float(incidentes["horas_atencion"].mean())
+        horas_totales = float(incidentes["horas_atencion"].sum())
+
+    return _build_semicircle_svg(
+        title_lines=["Duracion de las", "Fallas (Horas)"],
+        value=promedio_horas,
+        max_value=24.0,
+        active_color="#FFF200",
+        center_text=f"{promedio_horas:.1f}",
+        footer_text=f"Total: {horas_totales:.1f} h",
+        value_format="float",
+    )
+
+
+def _build_semicircle_svg(
+    title_lines: list[str],
+    value: float,
+    max_value: float,
+    active_color: str,
+    center_text: str,
+    footer_text: str | None,
+    value_format: str,
+) -> str:
+    max_value = max(float(max_value), 1.0)
+    progress = min(max(float(value), 0.0), max_value) / max_value
+
+    cx = 110
+    cy = 118
+    radius = 60
+    stroke = 18
+    circumference = math.pi * radius
+    active_length = circumference * progress
+    remainder_length = max(circumference - active_length, 0.0)
+    title_y = 18
+    title_svg = "".join(
+        f'<text x="110" y="{title_y + index * 20}" fill="white" font-size="14" font-weight="600" text-anchor="middle">{html.escape(line)}</text>'
+        for index, line in enumerate(title_lines)
+    )
+    footer_svg = ""
+    if footer_text:
+        footer_svg = (
+            f'<text x="110" y="166" fill="#d8d8d8" font-size="15.75" text-anchor="middle">{html.escape(footer_text)}</text>'
         )
-        legend_y += 18
+
+    left_label = "0"
+    if value_format == "int":
+        right_label = str(int(max_value))
+    else:
+        right_label = str(int(max_value)) if float(max_value).is_integer() else f"{max_value:.1f}"
 
     return (
         '<svg width="100%" height="100%" viewBox="0 0 220 176" xmlns="http://www.w3.org/2000/svg">'
-        '<text x="110" y="16" fill="white" font-size="12" font-weight="600" text-anchor="middle">Tiempo de Atención</text>'
-        f'<circle cx="{cx}" cy="{cy}" r="{radius}" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="{stroke}" />'
-        + "".join(segments)
-        + f'<circle cx="{cx}" cy="{cy}" r="24" fill="#111111" />'
-        + f'<text x="{cx}" y="{cy - 2}" fill="white" font-size="14" font-weight="600" text-anchor="middle">{total}</text>'
-        + f'<text x="{cx}" y="{cy + 14}" fill="white" font-size="10" text-anchor="middle">casos</text>'
-        + "".join(legend_rows)
-        + "</svg>"
-    )
-
-
-def _build_novedades_barras_svg(incidentes: pd.DataFrame) -> str:
-    causas_df = (
-        incidentes["causa"]
-        .fillna("Sin causa")
-        .astype(str)
-        .str.strip()
-        .replace("", "Sin causa")
-        .value_counts()
-        .head(5)
-        .reset_index()
-    )
-    causas_df.columns = ["causa", "cantidad"]
-    if causas_df.empty:
-        return "<div style='font-size:12px;color:white;'>Sin datos</div>"
-
-    causas_df = causas_df.sort_values("cantidad", ascending=True).reset_index(drop=True)
-    max_value = max(int(causas_df["cantidad"].max()), 1)
-    rows = []
-    base_y = 120
-    step = 34
-    bar_left = 10
-    bar_max = 184
-    palette = ["#29B6F6", "#00B8FF", "#7CFC00", "#FFD700", "#FF8C00"]
-    for idx, row in causas_df.iterrows():
-        y = base_y - idx * step
-        label = str(row["causa"])
-        if len(label) > 28:
-            label = label[:28] + "…"
-        width = max(18, int((int(row["cantidad"]) / max_value) * bar_max))
-        color = palette[idx % len(palette)]
-        rows.append(
-            f'<text x="10" y="{y}" fill="white" font-size="8.5">{html.escape(label)}</text>'
-            f'<rect x="{bar_left}" y="{y + 6}" width="{bar_max}" height="12" rx="6" fill="rgba(255,255,255,0.08)" />'
-            f'<rect x="{bar_left}" y="{y + 6}" width="{width}" height="12" rx="6" fill="{color}" />'
-            f'<text x="{bar_left + width - 4}" y="{y + 15}" fill="white" font-size="8.5" text-anchor="end">{int(row["cantidad"])}</text>'
+        + title_svg
+        + f'<path d="M {cx - radius} {cy} A {radius} {radius} 0 0 1 {cx + radius} {cy}" fill="none" stroke="#D9D9D9" stroke-width="{stroke}" stroke-linecap="butt" />'
+        + (
+            f'<path d="M {cx - radius} {cy} A {radius} {radius} 0 0 1 {cx + radius} {cy}" '
+            f'fill="none" stroke="{active_color}" stroke-width="{stroke}" stroke-linecap="butt" '
+            f'stroke-dasharray="{active_length:.2f} {remainder_length:.2f}" />'
+            if active_length > 0
+            else ""
         )
-
-    return (
-        '<svg width="100%" height="100%" viewBox="0 0 220 176" xmlns="http://www.w3.org/2000/svg">'
-        '<text x="110" y="16" fill="white" font-size="12" font-weight="600" text-anchor="middle">Causas de Incidentes</text>'
-        + "".join(rows)
+        + f'<text x="{cx}" y="{cy + 18}" fill="white" font-size="27" font-weight="500" text-anchor="middle">{html.escape(center_text)}</text>'
+        + f'<text x="{cx - radius - 6}" y="{cy + 20}" fill="white" font-size="12" text-anchor="middle">{html.escape(left_label)}</text>'
+        + f'<text x="{cx + radius + 6}" y="{cy + 20}" fill="white" font-size="12" text-anchor="middle">{html.escape(right_label)}</text>'
+        + footer_svg
         + "</svg>"
     )
 

@@ -12,6 +12,7 @@ NOVEDAD_COLORS = {
     "APAGADA": "#C44E7A",
     "INTERMITENTE": "#9BBB59",
     "MANTENIMIENTO": "#FF8C00",
+    "EN PMT": "#0D3B66",
 }
 
 
@@ -41,8 +42,15 @@ def _normalize_estado_interseccion(value: object) -> str:
         "MANTENIMIENTO": "MANTENIMIENTO",
         "APAGADO": "APAGADA",
         "APAGADA": "APAGADA",
+        "EN PMT": "EN PMT",
     }
     return aliases.get(normalized, "EN SERVICIO")
+
+
+def _contains_pmt(value: object) -> bool:
+    if pd.isna(value):
+        return False
+    return "PMT" in str(value).upper()
 
 
 def build_novedades_dataset(df: pd.DataFrame, filters: dict | None = None) -> pd.DataFrame:
@@ -51,16 +59,17 @@ def build_novedades_dataset(df: pd.DataFrame, filters: dict | None = None) -> pd
         return dataset
 
     dataset = dataset.dropna(subset=["latitud", "longitud"]).copy()
-    if filters:
-        dataset = apply_common_filters(dataset, filters)
-
     incident_mask = dataset["id_de_solicitud"].notna() & (dataset["id_de_solicitud"].astype(str).str.strip() != "")
     dataset["incidente_activo"] = np.where(incident_mask, "SI", "NO")
-    dataset["estado_de_la_interseccion"] = (
-        dataset["estado_de_la_interseccion"]
-        .fillna("EN SERVICIO")
-        .apply(_normalize_estado_interseccion)
+    raw_estado_interseccion = dataset["estado_de_la_interseccion"].copy()
+    pmt_mask = raw_estado_interseccion.apply(_contains_pmt) | dataset["causa"].apply(_contains_pmt)
+    dataset["estado_de_la_interseccion"] = np.where(
+        pmt_mask,
+        "EN PMT",
+        raw_estado_interseccion.fillna("EN SERVICIO").apply(_normalize_estado_interseccion),
     )
+    if filters:
+        dataset = apply_common_filters(dataset, filters)
     dataset = dataset[dataset["estado_de_la_interseccion"].isin(NOVEDAD_COLORS)].copy()
     if dataset.empty:
         return dataset

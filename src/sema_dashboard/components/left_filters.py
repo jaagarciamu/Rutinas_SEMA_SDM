@@ -46,6 +46,14 @@ def render_left_filters() -> None:
         key="filter_externo_widget",
     )
 
+    direccion = st.selectbox(
+        "Direccion",
+        options=options["direccion"],
+        index=options["direccion"].index(st.session_state.filters.get("direccion", "")),
+        format_func=_format_option,
+        key="filter_direccion_widget",
+    )
+
     acceso = st.selectbox(
         "Acceso",
         options=options["acceso"],
@@ -62,6 +70,25 @@ def render_left_filters() -> None:
         key="filter_zona_auto_widget",
     )
 
+    estado_concert = st.selectbox(
+        "Estado Concert",
+        options=options["estado_concert"],
+        index=options["estado_concert"].index(st.session_state.filters.get("estado_concert", "")),
+        format_func=_format_option,
+        key="filter_estado_concert_widget",
+    )
+
+    gestion_sema = st.selectbox(
+        "Gestion SEMA",
+        options=options["gestion_sema"],
+        index=options["gestion_sema"].index(st.session_state.filters.get("gestion_sema", "")),
+        format_func=_format_option,
+        key="filter_gestion_sema_widget",
+    )
+
     update_filter("externo", externo)
+    update_filter("direccion", direccion)
     update_filter("acceso", acceso)
     update_filter("zona_auto", zona_auto)
+    update_filter("estado_concert", estado_concert)
+    update_filter("gestion_sema", gestion_sema)
