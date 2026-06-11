@@ -2,11 +2,22 @@ from __future__ import annotations
 
 PAGE_TITLE = "Centro de Control SEMA"
 
+SEMA_EN_LINEA_VIEW_STATE = {
+    "latitude": 4.667,
+    "longitude": -74.140,
+    "zoom": 11.05,
+}
+
+SEMA_EN_LINEA_SELECTED_VIEW_STATE = {
+    "zoom": 13.6,
+}
+
 MAPS = {
     "inventario": "Mapa Sistema Semaforizacion Inteligente",
     "detecciones": "Mapa Detecciones SEMA",
     "estados": "Mapa Estados Concert SEMA",
     "novedades": "Mapa Atencion Novedades SEMA",
+    "sema_en_linea": "SEMA en linea",
 }
 
 CHARTS = {
@@ -48,6 +59,7 @@ DEFAULT_FILTERS = {
     "fecha_fin": None,
     "externo": "",
     "direccion": "",
+    "corredor": "",
     "acceso": "",
     "zona_auto": "",
     "estado_concert": "",

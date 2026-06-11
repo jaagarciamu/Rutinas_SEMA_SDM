@@ -78,6 +78,7 @@ def normalize_estados_frame(df: pd.DataFrame) -> pd.DataFrame:
         "ID_DE_SOLICITUD": "id_de_solicitud",
         "ESTADO_DE_LA_INTERSECCION": "estado_de_la_interseccion",
         "TIEMPO_TRANSCURRIDO": "tiempo_transcurrido",
+        "CORREDOR": "corredor",
     }
     for source_column, target_column in alias_map.items():
         if source_column in dataset.columns and target_column not in dataset.columns:
@@ -101,6 +102,7 @@ def normalize_estados_frame(df: pd.DataFrame) -> pd.DataFrame:
         "id_de_solicitud",
         "estado_de_la_interseccion",
         "tiempo_transcurrido",
+        "corredor",
     ]:
         if column not in dataset.columns:
             dataset[column] = None

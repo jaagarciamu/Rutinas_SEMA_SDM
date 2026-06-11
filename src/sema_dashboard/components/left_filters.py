@@ -33,7 +33,7 @@ def render_left_filters() -> None:
     update_filter("fecha_inicio", fecha_inicio)
     update_filter("fecha_fin", fecha_fin)
 
-    options = get_filter_options(st.session_state.filters)
+    options = get_filter_options(st.session_state.filters, st.session_state.active_map)
     normalized_filters = coerce_filters_to_available_options(st.session_state.filters, options)
     if normalized_filters != st.session_state.filters:
         st.session_state.filters = normalized_filters
@@ -52,6 +52,14 @@ def render_left_filters() -> None:
         index=options["direccion"].index(st.session_state.filters.get("direccion", "")),
         format_func=_format_option,
         key="filter_direccion_widget",
+    )
+
+    corredor = st.selectbox(
+        "Corredor",
+        options=options["corredor"],
+        index=options["corredor"].index(st.session_state.filters.get("corredor", "")),
+        format_func=_format_option,
+        key="filter_corredor_widget",
     )
 
     acceso = st.selectbox(
@@ -88,6 +96,7 @@ def render_left_filters() -> None:
 
     update_filter("externo", externo)
     update_filter("direccion", direccion)
+    update_filter("corredor", corredor)
     update_filter("acceso", acceso)
     update_filter("zona_auto", zona_auto)
     update_filter("estado_concert", estado_concert)

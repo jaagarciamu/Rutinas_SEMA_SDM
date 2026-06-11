@@ -72,11 +72,28 @@ def _apply_dialog_theme(max_width: int = DIALOG_MAX_WIDTH) -> None:
     st.markdown(
         f"""
         <style>
+        [data-testid="stDialog"] [role="dialog"] {{
+            background: #111111 !important;
+            color: #ecf4ff !important;
+        }}
         [data-testid="stDialog"] [data-testid="stDialogContent"] {{
-            background: #111111;
+            background: #111111 !important;
+            color: #ecf4ff !important;
+            border: 1px solid rgba(118,189,255,0.16) !important;
         }}
         [data-testid="stDialog"] [data-testid="stDialogContent"] > div {{
             max-width: {max_width}px;
+            background: #111111 !important;
+            color: #ecf4ff !important;
+        }}
+        [data-testid="stDialog"] h1,
+        [data-testid="stDialog"] h2,
+        [data-testid="stDialog"] h3,
+        [data-testid="stDialog"] p,
+        [data-testid="stDialog"] label,
+        [data-testid="stDialog"] span,
+        [data-testid="stDialog"] div {{
+            color: #ecf4ff;
         }}
         </style>
         """,

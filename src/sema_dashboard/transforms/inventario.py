@@ -45,12 +45,13 @@ def build_inventario_dataset(df: pd.DataFrame, filters: dict | None = None) -> p
         "LATITUD": "latitud",
         "FUNCIONAMIENTO": "funcionamiento",
         "OPERACION ACTUAL": "OPERACION ACTUAL",
+        "CORREDOR": "corredor",
     }
     for source_column, target_column in alias_map.items():
         if source_column in dataset.columns and target_column not in dataset.columns:
             dataset[target_column] = dataset[source_column]
 
-    for column in ["latitud", "longitud", "externo", "ZONA AUTO"]:
+    for column in ["latitud", "longitud", "externo", "ZONA AUTO", "corredor"]:
         if column not in dataset.columns:
             dataset[column] = None
 
@@ -60,6 +61,7 @@ def build_inventario_dataset(df: pd.DataFrame, filters: dict | None = None) -> p
     dataset = dataset.dropna(subset=["latitud", "longitud"]).copy()
     dataset["externo"] = dataset["externo"].astype(str)
     dataset["ZONA AUTO"] = dataset["ZONA AUTO"].fillna("Sin zona").astype(str)
+    dataset["corredor"] = dataset["corredor"].fillna("").astype(str).str.strip()
 
     if "FECHA DE INSTALACION" in dataset.columns:
         dataset["FECHA DE INSTALACION"] = pd.to_datetime(
@@ -79,6 +81,7 @@ def build_inventario_dataset(df: pd.DataFrame, filters: dict | None = None) -> p
         "externo",
         "DIRECCION CORTA",
         "localidad",
+        "corredor",
         "ZONA PLANEAMIENTO",
         "REFERENCIA EQUIPO",
         "# INTERSECCIONES POR EQUIPO",
@@ -113,6 +116,8 @@ def build_inventario_dataset(df: pd.DataFrame, filters: dict | None = None) -> p
             f"{_safe_value(row['DIRECCION CORTA'])}<br>"
             "<b>LOCALIDAD:</b> "
             f"{_safe_value(row['localidad'])}<br>"
+            "<b>CORREDOR:</b> "
+            f"{_safe_value(row['corredor'])}<br>"
             "<b>ZONA PLANEAMIENTO:</b> "
             f"{_safe_value(row['ZONA PLANEAMIENTO'])}<br>"
             "<b>ZONA AUTO:</b> "

@@ -4,10 +4,10 @@ import pandas as pd
 import pydeck as pdk
 
 
-def build_detecciones_map(dataset: pd.DataFrame, view_state: dict) -> pdk.Deck:
+def build_sema_en_linea_map(dataset: pd.DataFrame, view_state: dict) -> pdk.Deck:
     layer = pdk.Layer(
         "ScatterplotLayer",
-        id="detecciones-layer",
+        id="sema-en-linea-layer",
         data=dataset,
         get_position="[longitud, latitud]",
         get_fill_color="color_rgb",
@@ -15,11 +15,11 @@ def build_detecciones_map(dataset: pd.DataFrame, view_state: dict) -> pdk.Deck:
         pickable=True,
         stroked=True,
         filled=True,
-        radius_min_pixels=4,
+        radius_min_pixels=6,
         radius_max_pixels=90,
         line_width_min_pixels=1,
-        get_line_color=[255, 255, 255, 110],
-        opacity=0.40,
+        get_line_color=[255, 255, 255, 120],
+        opacity=0.55,
     )
     return pdk.Deck(
         map_style=pdk.map_styles.CARTO_DARK,
@@ -28,11 +28,13 @@ def build_detecciones_map(dataset: pd.DataFrame, view_state: dict) -> pdk.Deck:
         tooltip={
             "html": "{tooltip_html}",
             "style": {
-                "backgroundColor": "#222222",
+                "backgroundColor": "rgba(20,20,20,0.84)",
                 "color": "white",
-                "fontSize": "8px",
-                "borderRadius": "8px",
-                "padding": "6px 10px",
+                "fontFamily": "Arial",
+                "fontSize": "10px",
+                "borderRadius": "10px",
+                "padding": "8px 10px",
+                "maxWidth": "280px",
             },
         },
     )

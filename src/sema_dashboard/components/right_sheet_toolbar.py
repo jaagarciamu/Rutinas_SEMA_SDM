@@ -15,7 +15,7 @@ def render_right_sheet_toolbar() -> None:
         unsafe_allow_html=True,
     )
     if st.button(
-        "F. Tecnica",
+        "F.\u00A0Tecnica",
         key="sheet_tecnica",
         use_container_width=True,
         disabled=not has_externo,

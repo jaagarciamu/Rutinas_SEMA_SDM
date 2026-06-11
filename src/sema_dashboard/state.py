@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from sema_dashboard.config import DEFAULT_FILTERS
+from sema_dashboard.config import DEFAULT_FILTERS, SEMA_EN_LINEA_VIEW_STATE
 
 
 def initialize_state() -> None:
@@ -14,7 +14,8 @@ def initialize_state() -> None:
         "overlay_open": False,
         "overlay_type": None,
         "overlay_key": None,
-        "map_view_state": {"latitude": 4.65, "longitude": -74.1, "zoom": 11.2},
+        "map_view_state": {"latitude": 4.65, "longitude": -74.118, "zoom": 11.35},
+        "sema_en_linea_view_state": SEMA_EN_LINEA_VIEW_STATE.copy(),
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -25,6 +26,16 @@ def initialize_state() -> None:
         filters.pop("sensor", None)
         st.session_state.filters = filters
 
+    if isinstance(st.session_state.get("filters"), dict):
+        filters = dict(st.session_state.filters)
+        changed = False
+        for key, value in DEFAULT_FILTERS.items():
+            if key not in filters:
+                filters[key] = value
+                changed = True
+        if changed:
+            st.session_state.filters = filters
+
 
 def switch_map(map_key: str) -> None:
     st.session_state.active_map = map_key
@@ -33,6 +44,7 @@ def switch_map(map_key: str) -> None:
     st.session_state.overlay_key = None
     st.session_state.selected_externo = None
     st.session_state.selected_feature_count = 0
+    st.session_state.sema_en_linea_view_state = SEMA_EN_LINEA_VIEW_STATE.copy()
 
 
 def open_overlay(overlay_type: str, overlay_key: str) -> None:

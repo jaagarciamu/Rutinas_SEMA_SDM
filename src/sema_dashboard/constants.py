@@ -5,6 +5,7 @@ MAP_ICONS = {
     "detecciones": "📈",
     "estados": "🟢",
     "novedades": "⚠️",
+    "sema_en_linea": "📡",
 }
 
 CHART_ICONS = {

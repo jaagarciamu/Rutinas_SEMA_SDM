@@ -11,6 +11,7 @@ from sema_dashboard.transforms.inventario import build_inventario_dataset
 LEFT_FIELDS = [
     ("Direccion corta", "DIRECCION CORTA"),
     ("Localidad", "localidad"),
+    ("Corredor", "corredor"),
     ("Zona planeamiento", "ZONA PLANEAMIENTO"),
     ("Zona automatica", "ZONA AUTO"),
     ("Referencia equipo", "REFERENCIA EQUIPO"),

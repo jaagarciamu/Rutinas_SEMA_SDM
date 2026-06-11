@@ -114,12 +114,16 @@ def build_detecciones_dataset(
     if states_filters := filters:
         estados = apply_common_filters(estados, states_filters)
     estados = estados[
-        ["externo", "direccion", "localidad", "zona_auto", "equipo", "operacion", "longitud", "latitud"]
+        ["externo", "direccion", "localidad", "zona_auto", "corredor", "equipo", "operacion", "longitud", "latitud"]
     ].drop_duplicates(subset="externo")
     estados["externo"] = estados["externo"].astype(str)
 
     mapa_det["ext"] = mapa_det["ext"].astype(str)
     mapa_det = mapa_det.merge(estados, left_on="ext", right_on="externo", how="left")
+    if filters:
+        mapa_det = apply_common_filters(mapa_det, filters)
+    if mapa_det.empty:
+        return mapa_det
     mapa_det = mapa_det.dropna(subset=["latitud", "longitud"]).copy()
     mapa_det["categoria"] = mapa_det["Ocupacion"].apply(_classify_ocupacion)
     mapa_det["color_hex"] = mapa_det["categoria"].map(DETECCION_COLORS).fillna("#808080")
