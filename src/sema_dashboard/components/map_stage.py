@@ -54,7 +54,7 @@ def render_map_stage() -> None:
         unsafe_allow_html=True
     )
 
-    if mapa_actual == "sema_en_linea":
+    if mapa_actual in {"sema_en_linea", "novedades", "estados"}:
         st.markdown(
             _build_title_badge(map_context),
             unsafe_allow_html=True,
@@ -115,7 +115,12 @@ def _build_current_map(filters: dict) -> tuple[pdk.Deck, pd.DataFrame, str | Non
             if estados.empty:
                 st.info("No hay estados para los filtros actuales.")
                 return _build_empty_map(), pd.DataFrame(), None, {}
-            return build_estados_map(estados, st.session_state.map_view_state), estados.reset_index(drop=True), "externo", {}
+            return (
+                build_estados_map(estados, st.session_state.map_view_state),
+                estados.reset_index(drop=True),
+                "externo",
+                {"updated_at": pd.to_datetime(estados_raw.get("FECHA", estados_raw.get("fecha")), errors="coerce").max()},
+            )
 
         if st.session_state.active_map == "novedades":
             novedades_raw = fetch_novedades()
@@ -123,7 +128,12 @@ def _build_current_map(filters: dict) -> tuple[pdk.Deck, pd.DataFrame, str | Non
             if novedades.empty:
                 st.info("No hay novedades para los filtros actuales.")
                 return _build_empty_map(), pd.DataFrame(), None, {}
-            return build_novedades_map(novedades, st.session_state.map_view_state), novedades.reset_index(drop=True), "externo", {}
+            return (
+                build_novedades_map(novedades, st.session_state.map_view_state),
+                novedades.reset_index(drop=True),
+                "externo",
+                {"updated_at": pd.to_datetime(novedades_raw.get("FECHA", novedades_raw.get("fecha")), errors="coerce").max()},
+            )
 
         if st.session_state.active_map == "sema_en_linea":
             payload = get_sema_en_linea_payload(filters)
@@ -255,11 +265,17 @@ def _resolve_sema_en_linea_view_state(dataset: pd.DataFrame, filters: dict) -> d
 
 
 def _build_title_badge(map_context: dict[str, object]) -> str:
-    if st.session_state.active_map != "sema_en_linea":
+    active_map = st.session_state.active_map
+    if active_map not in {"sema_en_linea", "novedades", "estados"}:
         return ""
 
-    summary = map_context.get("summary") if isinstance(map_context, dict) else None
-    updated_at = summary.get("updated_at") if isinstance(summary, dict) else None
+    updated_at = None
+    if isinstance(map_context, dict):
+        if active_map == "sema_en_linea":
+            summary = map_context.get("summary")
+            updated_at = summary.get("updated_at") if isinstance(summary, dict) else None
+        else:
+            updated_at = map_context.get("updated_at")
     label = "Actualización"
     value = "-"
     if pd.notna(updated_at):
@@ -452,6 +468,7 @@ def _render_map_overlays(filters: dict) -> None:
                 ("EN SERVICIO", "#00FF66"),
                 ("AISLADA", "#29B6F6"),
                 ("APAGADA", "#C44E7A"),
+                ("APAGADO PROGRAMADO", "#7E57C2"),
                 ("INTERMITENTE", "#9BBB59"),
                 ("MANTENIMIENTO", "#FF8C00"),
                 ("EN PMT", "#0D3B66"),
@@ -472,7 +489,7 @@ def _render_map_overlays(filters: dict) -> None:
             f"Incidentes activos : {len(incidentes)}<br><br>"
             f"Promedio atencion : {promedio_atencion:.1f} h<br><br>"
         )
-        for est in ["EN SERVICIO", "AISLADA", "INTERMITENTE", "APAGADA", "MANTENIMIENTO", "EN PMT"]:
+        for est in ["EN SERVICIO", "AISLADA", "INTERMITENTE", "APAGADA", "APAGADO PROGRAMADO", "MANTENIMIENTO", "EN PMT"]:
             if est in estado_count:
                 resumen += f"{est}: {estado_count[est]}<br>"
         _render_overlay_boxes(

@@ -90,16 +90,17 @@ def build_detecciones_chart(detecciones_df: pd.DataFrame, externo: str | None = 
         showlegend=True,
         legend=dict(
             title="Accesos",
-            x=0.99,
-            y=0.99,
-            xanchor="right",
-            yanchor="top",
+            orientation="h",
+            x=0.5,
+            y=1.12,
+            xanchor="center",
+            yanchor="bottom",
             bgcolor="rgba(0,0,0,0.70)",
             bordercolor="#888888",
             borderwidth=1,
             font=dict(size=11, color="white"),
         ),
-        margin=dict(l=50, r=50, t=80, b=50),
+        margin=dict(l=50, r=50, t=130, b=50),
     )
     fig.update_xaxes(
         title="Tiempo",

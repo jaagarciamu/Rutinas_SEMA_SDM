@@ -10,6 +10,7 @@ NOVEDAD_COLORS = {
     "EN SERVICIO": "#00FF66",
     "AISLADA": "#29B6F6",
     "APAGADA": "#C44E7A",
+    "APAGADO PROGRAMADO": "#7E57C2",
     "INTERMITENTE": "#9BBB59",
     "MANTENIMIENTO": "#FF8C00",
     "EN PMT": "#0D3B66",
@@ -31,6 +32,7 @@ def _normalize_estado_interseccion(value: object) -> str:
     if pd.isna(value):
         return "EN SERVICIO"
     normalized = str(value).strip().upper()
+    normalized_compact = normalized.replace(" ", "")
     aliases = {
         "EN SERVICIO": "EN SERVICIO",
         "OPERANDO": "EN SERVICIO",
@@ -42,8 +44,12 @@ def _normalize_estado_interseccion(value: object) -> str:
         "MANTENIMIENTO": "MANTENIMIENTO",
         "APAGADO": "APAGADA",
         "APAGADA": "APAGADA",
+        "APAGADO PROGRAMADO": "APAGADO PROGRAMADO",
+        "APAGADO PROGRAMADO 2": "APAGADO PROGRAMADO",
         "EN PMT": "EN PMT",
     }
+    if normalized_compact in {"APAGADOPROGRAMADO", "APAGADOPROGRAMADO2"}:
+        return "APAGADO PROGRAMADO"
     return aliases.get(normalized, "EN SERVICIO")
 
 
