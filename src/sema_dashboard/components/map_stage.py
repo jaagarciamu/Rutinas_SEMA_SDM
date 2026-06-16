@@ -21,6 +21,7 @@ from sema_dashboard.repositories.estados_repository import fetch_estados
 from sema_dashboard.repositories.inventario_repository import fetch_inventario
 from sema_dashboard.repositories.novedades_repository import fetch_novedades
 from sema_dashboard.services.dashboard_data_service import get_detecciones_map_dataset, get_sema_en_linea_payload
+from sema_dashboard.services.filter_state_service import get_active_filters
 from sema_dashboard.transforms.estados import build_estados_dataset
 from sema_dashboard.transforms.inventario import build_inventario_dataset
 from sema_dashboard.transforms.novedades import build_novedades_dataset
@@ -29,7 +30,8 @@ from sema_dashboard.ui.interactions import update_filter
 
 def render_map_stage() -> None:
     mapa_actual = st.session_state.active_map
-    filters = dict(st.session_state.filters)
+    filters = get_active_filters(mapa_actual)
+    map_instance_key = _build_map_instance_key(mapa_actual, filters)
 
     titulos = {
         "inventario": "Mapa Sistema Semaforización Inteligente",
@@ -65,14 +67,15 @@ def render_map_stage() -> None:
         unsafe_allow_html=True
     )
 
-    event = st.pydeck_chart(
-        deck,
-        width="stretch",
-        height=680,
-        on_select="rerun",
-        selection_mode="single-object",
-        key=f"sema-map-{mapa_actual}",
-    )
+    with st.container(key=f"sema-map-shell-{map_instance_key}"):
+        event = st.pydeck_chart(
+            deck,
+            width="stretch",
+            height=680,
+            on_select="rerun",
+            selection_mode="single-object",
+            key=f"sema-map-{map_instance_key}",
+        )
 
     _sync_map_selection(event, selection_dataset, external_column)
 
@@ -87,6 +90,15 @@ def render_map_stage() -> None:
         "</div>",
         unsafe_allow_html=True
     )
+
+
+def _build_map_instance_key(mapa_actual: str, filters: dict) -> str:
+    revision = st.session_state.get("map_view_revision", 0)
+    filter_signature = "|".join(
+        f"{key}={filters.get(key, '')}"
+        for key in ["externo", "direccion", "corredor", "acceso", "zona_auto", "estado_concert", "gestion_sema"]
+    )
+    return f"{mapa_actual}-{revision}-{filter_signature}"
 
 
 def _build_current_map(filters: dict) -> tuple[pdk.Deck, pd.DataFrame, str | None, dict[str, object]]:
@@ -635,7 +647,7 @@ def _render_overlay_boxes(
 
 def _render_novedades_bottom_panels() -> None:
     novedades_raw = fetch_novedades()
-    dataset = build_novedades_dataset(novedades_raw, st.session_state.filters)
+    dataset = build_novedades_dataset(novedades_raw, get_active_filters("novedades"))
     if dataset.empty:
         return
 

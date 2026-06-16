@@ -5,6 +5,7 @@ from datetime import date, timedelta
 import streamlit as st
 
 from sema_dashboard.services.filter_catalog_service import coerce_filters_to_available_options, get_filter_options
+from sema_dashboard.services.filter_state_service import get_active_date_range, get_active_filters, set_active_date_range
 from sema_dashboard.ui.interactions import apply_pending_widget_sync, sync_filters_from_widgets, update_filter
 
 
@@ -20,30 +21,46 @@ def render_left_filters() -> None:
     unsafe_allow_html=True
     )
 
+    active_date_range = get_active_date_range()
+    if st.session_state.get("filter_fecha_inicio_widget") != active_date_range.get("fecha_inicio"):
+        st.session_state["filter_fecha_inicio_widget"] = active_date_range.get("fecha_inicio")
+    if st.session_state.get("filter_fecha_fin_widget") != active_date_range.get("fecha_fin"):
+        st.session_state["filter_fecha_fin_widget"] = active_date_range.get("fecha_fin")
+
     fecha_inicio = st.date_input(
         "Fecha inicio",
-        value=st.session_state.filters.get("fecha_inicio") or (date.today() - timedelta(days=7)),
+        value=active_date_range.get("fecha_inicio") or (date.today() - timedelta(days=7)),
         key="filter_fecha_inicio_widget",
     )
 
     fecha_fin = st.date_input(
         "Fecha fin",
-        value=st.session_state.filters.get("fecha_fin") or date.today(),
+        value=active_date_range.get("fecha_fin") or date.today(),
         key="filter_fecha_fin_widget",
     )
 
-    update_filter("fecha_inicio", fecha_inicio)
-    update_filter("fecha_fin", fecha_fin)
+    if (
+        fecha_inicio != active_date_range.get("fecha_inicio")
+        or fecha_fin != active_date_range.get("fecha_fin")
+    ):
+        set_active_date_range(fecha_inicio, fecha_fin)
     sync_filters_from_widgets()
 
-    options = get_filter_options(st.session_state.filters, st.session_state.active_map)
+    active_filters = get_active_filters()
+    options = get_filter_options(active_filters, st.session_state.active_map)
     normalized_filters = coerce_filters_to_available_options(st.session_state.filters, options)
     if normalized_filters != st.session_state.filters:
+        pending = {
+            key: value
+            for key, value in normalized_filters.items()
+            if st.session_state.filters.get(key) != value
+        }
         st.session_state.filters = normalized_filters
-        pending = dict(st.session_state.get("_pending_filter_widget_sync", {}))
-        pending.update(normalized_filters)
-        st.session_state["_pending_filter_widget_sync"] = pending
-        apply_pending_widget_sync()
+        if pending:
+            pending_widget_sync = dict(st.session_state.get("_pending_filter_widget_sync", {}))
+            pending_widget_sync.update(pending)
+            st.session_state["_pending_filter_widget_sync"] = pending_widget_sync
+        st.rerun()
 
     externo = st.selectbox(
         "Externo",
@@ -115,4 +132,10 @@ def render_left_filters() -> None:
 
     if previous_filters.get("direccion") and not direccion and externo:
         update_filter("externo", "", sync_widget=True)
+        st.rerun()
+
+    if any(
+        previous_filters.get(key) != st.session_state.filters.get(key)
+        for key in ["externo", "direccion", "corredor", "acceso", "zona_auto", "estado_concert", "gestion_sema"]
+    ):
         st.rerun()

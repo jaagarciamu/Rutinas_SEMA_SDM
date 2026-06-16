@@ -2,6 +2,7 @@ venv/
 .venv/
 __pycache__/
 .env
+.streamlit/secrets.toml
 logs/*.log
 *.pyc
 config/google-service-account.json

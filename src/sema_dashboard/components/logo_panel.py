@@ -8,7 +8,7 @@ def render_logo_panel() -> None:
     st.markdown("<div class='logo-wrapper'>", unsafe_allow_html=True)
 
     st.image(
-        "app/assets/logos/logo_sema.png",
+        "app/assets/logos/Prudencia_SEMA-fin.png",
         use_container_width=True
     )
 

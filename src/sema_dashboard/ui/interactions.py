@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import streamlit as st
 
+from sema_dashboard.config import DEFAULT_MAP_VIEW_STATE
+
 FILTER_WIDGET_KEYS = {
-    "fecha_inicio": "filter_fecha_inicio_widget",
-    "fecha_fin": "filter_fecha_fin_widget",
     "externo": "filter_externo_widget",
     "direccion": "filter_direccion_widget",
     "corredor": "filter_corredor_widget",
@@ -15,16 +15,41 @@ FILTER_WIDGET_KEYS = {
 }
 
 PENDING_FILTER_WIDGET_SYNC_KEY = "_pending_filter_widget_sync"
+MAP_VIEW_RESET_FILTERS = {
+    "externo",
+    "direccion",
+    "corredor",
+    "acceso",
+    "zona_auto",
+    "estado_concert",
+    "gestion_sema",
+}
+MAPS_WITH_FILTER_VIEW_RESET = {"inventario", "detecciones", "estados", "novedades"}
 
 
 def update_filter(key: str, value: object, *, sync_widget: bool = False) -> None:
     filters = dict(st.session_state.filters)
+    current_value = filters.get(key)
+    if current_value == value:
+        if sync_widget:
+            pending = dict(st.session_state.get(PENDING_FILTER_WIDGET_SYNC_KEY, {}))
+            pending[key] = value
+            st.session_state[PENDING_FILTER_WIDGET_SYNC_KEY] = pending
+        return
     filters[key] = value
     st.session_state.filters = filters
+    if _should_reset_map_view(key):
+        st.session_state.map_view_state = DEFAULT_MAP_VIEW_STATE.copy()
+        st.session_state.map_view_revision = st.session_state.get("map_view_revision", 0) + 1
     if sync_widget:
         pending = dict(st.session_state.get(PENDING_FILTER_WIDGET_SYNC_KEY, {}))
         pending[key] = value
         st.session_state[PENDING_FILTER_WIDGET_SYNC_KEY] = pending
+
+
+def _should_reset_map_view(filter_key: str) -> bool:
+    active_map = st.session_state.get("active_map")
+    return active_map in MAPS_WITH_FILTER_VIEW_RESET and filter_key in MAP_VIEW_RESET_FILTERS
 
 
 def sync_filters_from_widgets() -> None:

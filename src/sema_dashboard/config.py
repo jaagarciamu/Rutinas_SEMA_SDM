@@ -2,6 +2,19 @@ from __future__ import annotations
 
 PAGE_TITLE = "Centro de Control SEMA"
 
+GENERAL_FILTER_MAPS = {
+    "inventario",
+    "detecciones",
+    "estados",
+    "novedades",
+}
+
+DEFAULT_MAP_VIEW_STATE = {
+    "latitude": 4.65,
+    "longitude": -74.118,
+    "zoom": 11.35,
+}
+
 SEMA_EN_LINEA_VIEW_STATE = {
     "latitude": 4.667,
     "longitude": -74.140,
@@ -55,8 +68,6 @@ EXTERNAL_LINKS = {
 }
 
 DEFAULT_FILTERS = {
-    "fecha_inicio": None,
-    "fecha_fin": None,
     "externo": "",
     "direccion": "",
     "corredor": "",

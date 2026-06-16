@@ -10,6 +10,7 @@ from sema_dashboard.components.externo_sheet import render_ficha_tecnica_content
 from sema_dashboard.config import CHARTS, MATRICES
 from sema_dashboard.matrices.dia_hora_matrix import build_dia_hora_matrix
 from sema_dashboard.services.dashboard_data_service import get_detecciones_raw, get_planes_raw
+from sema_dashboard.services.filter_state_service import get_active_filters
 from sema_dashboard.state import close_overlay
 
 DIALOG_MAX_WIDTH = 588
@@ -117,7 +118,7 @@ def _selected_externo() -> str | None:
 
 
 def _current_filters() -> dict:
-    return dict(st.session_state.filters)
+    return get_active_filters()
 
 
 def _build_chart_error_message(chart_name: str, externo: str | None, exc: Exception) -> str:
@@ -213,12 +214,13 @@ def _render_planes_dialog() -> None:
 def _render_dia_hora_dialog() -> None:
     externo = _selected_externo()
     try:
-        detecciones_df = get_detecciones_raw(_current_filters(), externo)
+        filters = _current_filters()
+        detecciones_df = get_detecciones_raw(filters, externo)
         fig, config = build_dia_hora_matrix(
             detecciones_df,
             externo,
-            st.session_state.filters.get("fecha_inicio"),
-            st.session_state.filters.get("fecha_fin"),
+            filters.get("fecha_inicio"),
+            filters.get("fecha_fin"),
         )
         _apply_dialog_theme(max_width=540)
         st.plotly_chart(fig, width="stretch", theme=None, config=config)
