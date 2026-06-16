@@ -178,54 +178,21 @@ def _sync_map_selection(event: object, dataset: pd.DataFrame, external_column: s
     if not selection:
         return
 
-    objects = None
-    if isinstance(selection, dict):
-        objects = selection.get("objects")
-        if objects is None and "indices" in selection:
-            indices = selection.get("indices")
-            if isinstance(indices, dict):
-                for layer_indices in indices.values():
-                    if layer_indices:
-                        objects = [{"index": layer_indices[0]}]
-                        break
-    elif hasattr(selection, "get"):
-        objects = selection.get("objects")
-
-    if not objects:
+    selected_row, selected_payload = _resolve_selected_map_item(selection, dataset)
+    if selected_row is None and selected_payload is None:
         return
 
-    first = None
-    if isinstance(objects, list):
-        if not objects:
-            return
-        first = objects[0]
-    elif isinstance(objects, dict):
-        if not objects:
-            return
-        first_value = next(iter(objects.values()))
-        if isinstance(first_value, list):
-            if not first_value:
-                return
-            first = first_value[0]
-        elif isinstance(first_value, dict):
-            first = first_value
-    if first is None:
+    externo = _resolve_selected_external(selected_row, selected_payload, external_column)
+    if not externo:
         return
 
-    index = first.get("index") if isinstance(first, dict) else None
-    if index is None:
-        return
-
-    try:
-        externo = str(dataset.iloc[int(index)][external_column])
-    except Exception:
-        return
+    direccion = _resolve_selected_direction(selected_row, selected_payload)
 
     if st.session_state.active_map == "sema_en_linea":
         try:
-            selected_row = dataset.iloc[int(index)]
-            latitude = float(selected_row["latitud"])
-            longitude = float(selected_row["longitud"])
+            source = selected_row if selected_row is not None else selected_payload
+            latitude = float(source["latitud"])
+            longitude = float(source["longitud"])
             st.session_state.sema_en_linea_view_state = {
                 **SEMA_EN_LINEA_VIEW_STATE,
                 "latitude": latitude,
@@ -236,11 +203,77 @@ def _sync_map_selection(event: object, dataset: pd.DataFrame, external_column: s
             st.session_state.sema_en_linea_view_state = SEMA_EN_LINEA_VIEW_STATE.copy()
 
     current = st.session_state.filters.get("externo", "")
+    current_direction = st.session_state.filters.get("direccion", "")
+    previous_selected_externo = st.session_state.selected_externo
+    should_rerun = False
     if externo:
         st.session_state.selected_externo = externo
+        if previous_selected_externo != externo:
+            should_rerun = True
         if current != externo:
-            update_filter("externo", externo)
-        st.rerun()
+            update_filter("externo", externo, sync_widget=True)
+            should_rerun = True
+        if direccion and current_direction != direccion:
+            update_filter("direccion", direccion, sync_widget=True)
+            should_rerun = True
+        if should_rerun:
+            st.rerun()
+
+
+def _resolve_selected_map_item(selection: object, dataset: pd.DataFrame) -> tuple[pd.Series | None, dict | None]:
+    indices = None
+    objects = None
+    if isinstance(selection, dict):
+        indices = selection.get("indices")
+        objects = selection.get("objects")
+    elif hasattr(selection, "get"):
+        indices = selection.get("indices")
+        objects = selection.get("objects")
+
+    selected_row = None
+    selected_payload = None
+
+    if isinstance(indices, dict) and indices:
+        first_indices = next((layer_indices for layer_indices in indices.values() if layer_indices), None)
+        if first_indices:
+            try:
+                selected_row = dataset.iloc[int(first_indices[0])]
+            except Exception:
+                selected_row = None
+
+    if isinstance(objects, dict) and objects:
+        first_objects = next((layer_objects for layer_objects in objects.values() if layer_objects), None)
+        if isinstance(first_objects, list) and first_objects:
+            first_payload = first_objects[0]
+            if isinstance(first_payload, dict):
+                selected_payload = first_payload
+
+    return selected_row, selected_payload
+
+
+def _resolve_selected_external(row: pd.Series | None, payload: dict | None, external_column: str) -> str:
+    for source in [row, payload]:
+        if source is None:
+            continue
+        for candidate in [external_column, "externo", "ext", "EXTERNO", "EXT"]:
+            if candidate in source:
+                value = str(source[candidate]).strip()
+                if value and value.lower() != "nan":
+                    return value
+    return ""
+
+
+def _resolve_selected_direction(row: pd.Series | None, payload: dict | None) -> str:
+    for source in [row, payload]:
+        if source is None:
+            continue
+        keys = source.index if isinstance(source, pd.Series) else source.keys()
+        for candidate in ["direccion", "DIRECCION CORTA", "Direccion", "DIRECCION"]:
+            if candidate in keys:
+                value = str(source.get(candidate, "")).strip()
+                if value and value.lower() != "nan":
+                    return value
+    return ""
 
 
 def _resolve_sema_en_linea_view_state(dataset: pd.DataFrame, filters: dict) -> dict[str, float]:

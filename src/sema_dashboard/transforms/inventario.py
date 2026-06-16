@@ -40,6 +40,7 @@ def build_inventario_dataset(df: pd.DataFrame, filters: dict | None = None) -> p
 
     alias_map = {
         "EXTERNO": "externo",
+        "DIRECCION CORTA": "direccion",
         "LOCALIDAD": "localidad",
         "LONGITUD": "longitud",
         "LATITUD": "latitud",

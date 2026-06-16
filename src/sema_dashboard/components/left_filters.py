@@ -5,7 +5,7 @@ from datetime import date, timedelta
 import streamlit as st
 
 from sema_dashboard.services.filter_catalog_service import coerce_filters_to_available_options, get_filter_options
-from sema_dashboard.ui.interactions import update_filter
+from sema_dashboard.ui.interactions import apply_pending_widget_sync, sync_filters_from_widgets, update_filter
 
 
 def _format_option(value: str) -> str:
@@ -13,6 +13,8 @@ def _format_option(value: str) -> str:
 
 
 def render_left_filters() -> None:
+    apply_pending_widget_sync()
+    previous_filters = dict(st.session_state.filters)
     st.markdown(
     '<div class="filters-title">Filtros</div>',
     unsafe_allow_html=True
@@ -32,11 +34,16 @@ def render_left_filters() -> None:
 
     update_filter("fecha_inicio", fecha_inicio)
     update_filter("fecha_fin", fecha_fin)
+    sync_filters_from_widgets()
 
     options = get_filter_options(st.session_state.filters, st.session_state.active_map)
     normalized_filters = coerce_filters_to_available_options(st.session_state.filters, options)
     if normalized_filters != st.session_state.filters:
         st.session_state.filters = normalized_filters
+        pending = dict(st.session_state.get("_pending_filter_widget_sync", {}))
+        pending.update(normalized_filters)
+        st.session_state["_pending_filter_widget_sync"] = pending
+        apply_pending_widget_sync()
 
     externo = st.selectbox(
         "Externo",
@@ -101,3 +108,11 @@ def render_left_filters() -> None:
     update_filter("zona_auto", zona_auto)
     update_filter("estado_concert", estado_concert)
     update_filter("gestion_sema", gestion_sema)
+
+    if previous_filters.get("externo") and not externo and direccion:
+        update_filter("direccion", "", sync_widget=True)
+        st.rerun()
+
+    if previous_filters.get("direccion") and not direccion and externo:
+        update_filter("externo", "", sync_widget=True)
+        st.rerun()
