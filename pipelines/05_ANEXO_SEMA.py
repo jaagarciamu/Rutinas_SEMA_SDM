@@ -153,6 +153,8 @@ def transform_anexo(df: pd.DataFrame) -> pd.DataFrame:
         "TIPO DE REGULACION CICLISTA ",
         "AÑO INSTALACION",
     ]
+    if "CORREDOR" in df.columns and "CORREDOR" not in selected_columns:
+        selected_columns.append("CORREDOR")
     existing_cols = [col for col in selected_columns if col in df.columns]
     espejo = df[existing_cols].copy()
 
@@ -270,6 +272,7 @@ def write_anexo_table(engine, espejo: pd.DataFrame, table_name: str) -> None:
         "TIPO DE REGULACION CICLISTA ": VARCHAR2(100),
         "AÑO INSTALACION": VARCHAR2(50),
     }
+    dtype_map["CORREDOR"] = VARCHAR2(50)
     typed_columns = {col: dtype_map[col] for col in espejo.columns if col in dtype_map}
     espejo.to_sql(
         name=table_name,

@@ -68,6 +68,8 @@ Variables clave:
 - `ORACLE_DSN`
 - `GOOGLE_APPLICATION_CREDENTIALS`
 - `GOOGLE_WORKSPACE_DELEGATED_USER`
+- `DETECCIONES_SEMA_RETENTION_DAYS`
+- `DETECCIONES_SEMA_RETENTION_TABLES`
 
 ## Cambio de Ubicacion en Drive (Detecciones)
 Cuando la carpeta de origen cambia y los IDs de Drive se regeneran, el flujo recomendado es:

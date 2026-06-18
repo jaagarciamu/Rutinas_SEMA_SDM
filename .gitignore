@@ -9,6 +9,4 @@ data/tmp/*
 !data/tmp/.gitkeep
 logs/*
 !logs/.gitkeep
-
-# Notebooks locales
 notebooks/

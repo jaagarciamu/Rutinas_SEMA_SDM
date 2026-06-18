@@ -319,10 +319,17 @@ def enrich_union_with_novedades(union: pd.DataFrame, novedad_sema: pd.DataFrame)
     if "NEI_KEY" in merged.columns:
         merged = merged.drop(columns=["NEI_KEY", "nei"], errors="ignore")
 
-    merged["CAUSA"] = merged.get("CAUSA", "").fillna("")
-    merged["ID_DE_SOLICITUD"] = merged.get("ID_DE_SOLICITUD", "").fillna("")
-    merged["ESTADO_DE_LA_INTERSECCION"] = merged.get("ESTADO_DE_LA_INTERSECCION", "").fillna("EN SERVICIO")
-    merged["TIEMPO_TRANSCURRIDO"] = merged.get("TIEMPO_TRANSCURRIDO", "").fillna("")
+    default_values = {
+        "CAUSA": "",
+        "ID_DE_SOLICITUD": "",
+        "ESTADO_DE_LA_INTERSECCION": "EN SERVICIO",
+        "TIEMPO_TRANSCURRIDO": "",
+    }
+    for column, default_value in default_values.items():
+        if column not in merged.columns:
+            merged[column] = default_value
+        else:
+            merged[column] = merged[column].fillna(default_value)
     return merged
 
 
@@ -652,9 +659,6 @@ def main() -> None:
                 registro_n = pd.concat([registro_df, processed_updates], ignore_index=True)
                 registro_n = normalize_registro_columns(registro_n)
                 registro_n = registro_n.sort_values(by="date", ascending=False)
-
-                write_dataframe_to_sheet(gspread_client, sheet_url, registro_tab, registro_n)
-                write_dataframe_to_sheet(gspread_client, sheet_url, estados_tab, union)
             else:
                 logger.info("No se lograron parsear estados desde los archivos pendientes")
         else:
@@ -739,6 +743,9 @@ def main() -> None:
         logger.info("Se actualizan %s registro(s) de estados - SEMA", len(ids))
     else:
         logger.info("Se actualiza EST_ACT_SEMA desde Oracle + novedades de sheet")
+
+    write_dataframe_to_sheet(gspread_client, sheet_url, registro_tab, registro_n)
+    write_dataframe_to_sheet(gspread_client, sheet_url, estados_tab, union)
 
 
 if __name__ == "__main__":

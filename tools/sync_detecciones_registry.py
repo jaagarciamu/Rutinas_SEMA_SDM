@@ -18,10 +18,13 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipelines.detecciones_file_rules import (
+    MANUAL_SELECTION_COLUMN,
     classify_drive_files,
     extract_processable_date_token,
+    is_manual_selection,
     is_processable_name,
     normalize_name_key,
+    select_processable_pending_rows,
 )
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -41,6 +44,7 @@ REQUIRED_COLUMNS = [
     "mes",
     "Estado",
     "num",
+    MANUAL_SELECTION_COLUMN,
 ]
 
 
@@ -233,36 +237,21 @@ def build_processable_pending_preview(
     min_size_mb: float,
     max_size_mb: float,
     target_size_mb: float,
-) -> tuple[pd.DataFrame, pd.Timestamp | None]:
+) -> tuple[pd.DataFrame, pd.Timestamp | None, pd.DataFrame]:
     """Replica el criterio de selección de 01_DETECCIONES_SEMA.py."""
-    df = ensure_required_columns(registro.copy())
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    df["name"] = df["name"].astype(str)
-    df["type_of_file"] = df["type_of_file"].astype(str)
-    df["Estado"] = df["Estado"].astype(str)
-
-    pending = df[df["Estado"].str.lower() == "pendiente"].copy()
-    processed = df[df["Estado"].str.lower() == "procesado"].copy()
-
-    max_processed_date = processed["date"].max()
-    if pd.notna(max_processed_date):
-        pending = pending[pending["date"] > max_processed_date]
-
-    pending, _ = filter_by_size_window(pending, min_size_mb=min_size_mb, max_size_mb=max_size_mb)
-    if not pending.empty:
-        pending["size_gap_mb"] = (
-            pd.to_numeric(pending["size_in_MB"], errors="coerce") - target_size_mb
-        ).abs()
-        pending = pending.sort_values(
-            by=["date", "size_gap_mb", "last_modification"],
-            ascending=[False, True, False],
-            na_position="last",
-        ).drop(columns=["size_gap_mb"])
-
+    pending, max_processed_date, excluded_by_size = select_processable_pending_rows(
+        ensure_required_columns(registro.copy()),
+        min_size_mb=min_size_mb,
+        max_size_mb=max_size_mb,
+        target_size_mb=target_size_mb,
+    )
     pending = pending[REQUIRED_COLUMNS].sort_values(
         by="date", ascending=False, na_position="last"
     )
-    return pending, max_processed_date
+    excluded_by_size = excluded_by_size[REQUIRED_COLUMNS].sort_values(
+        by="date", ascending=False, na_position="last"
+    )
+    return pending, max_processed_date, excluded_by_size
 
 
 def sync_registry(
@@ -449,43 +438,15 @@ def main() -> int:
         id_changes_df.to_csv(id_changes_path, index=False)
         print(f"Cambios de ID exportados en: {id_changes_path}")
 
-    _, cutoff_date = build_processable_pending_preview(
+    pending_df, cutoff_date, excluded_by_size_df = build_processable_pending_preview(
         merged_df,
         min_size_mb=args.min_size_mb,
         max_size_mb=args.max_size_mb,
         target_size_mb=args.target_size_mb,
     )
-    pending_candidates = ensure_required_columns(merged_df.copy())
-    pending_candidates["date"] = pd.to_datetime(pending_candidates["date"], errors="coerce")
-    pending_candidates["Estado"] = pending_candidates["Estado"].astype(str)
-    pending_candidates = pending_candidates[
-        pending_candidates["Estado"].str.lower() == "pendiente"
-    ].copy()
-    if pd.notna(cutoff_date):
-        pending_candidates = pending_candidates[pending_candidates["date"] > cutoff_date]
-    pending_df, excluded_by_size_df = filter_by_size_window(
-        pending_candidates,
-        min_size_mb=args.min_size_mb,
-        max_size_mb=args.max_size_mb,
-    )
-    if not pending_df.empty:
-        pending_df["size_gap_mb"] = (
-            pd.to_numeric(pending_df["size_in_MB"], errors="coerce") - args.target_size_mb
-        ).abs()
-        pending_df = pending_df.sort_values(
-            by=["date", "size_gap_mb", "last_modification"],
-            ascending=[False, True, False],
-            na_position="last",
-        ).drop(columns=["size_gap_mb"])
-    pending_df = pending_df[REQUIRED_COLUMNS].sort_values(
-        by="date", ascending=False, na_position="last"
-    )
-    excluded_by_size_df = excluded_by_size_df[REQUIRED_COLUMNS].sort_values(
-        by="date", ascending=False, na_position="last"
-    )
 
     if args.show_pending > 0:
-        print("\n=== Pendientes (10 campos) ===")
+        print("\n=== Pendientes seleccionables ===")
         print(
             "Fecha corte (max date en Procesado): "
             + (cutoff_date.isoformat() if pd.notna(cutoff_date) else "None")
@@ -498,6 +459,15 @@ def main() -> int:
             print("No hay registros en estado Pendiente.")
         else:
             print(f"Total pendientes: {len(pending_df)}")
+            manual_count = (
+                pending_df[MANUAL_SELECTION_COLUMN]
+                .astype(str)
+                .str.strip()
+                .str.lower()
+                .isin({"1", "si", "sí", "s", "x", "true", "manual", "forzar"})
+                .sum()
+            )
+            print(f"Pendientes seleccionados manualmente: {manual_count}")
             print(
                 "Rango fechas pendientes: "
                 f"{pending_df['date'].min()} -> {pending_df['date'].max()}"

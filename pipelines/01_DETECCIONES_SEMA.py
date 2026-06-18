@@ -25,10 +25,12 @@ if __package__ is None or __package__ == "":
 
 from pipelines.alerting import record_pipeline_failure, record_pipeline_success
 from pipelines.detecciones_file_rules import (
+    MANUAL_SELECTION_COLUMN,
     classify_drive_files,
     extract_processable_date_token as rules_extract_processable_date_token,
     is_processable_name as rules_is_processable_name,
     normalize_name_key as rules_normalize_name_key,
+    select_processable_pending_rows,
 )
 from sqlalchemy import inspect, text
 from sqlalchemy.dialects.oracle import FLOAT, NUMBER, TIMESTAMP, VARCHAR2
@@ -54,6 +56,7 @@ REQUIRED_COLUMNS = [
     "mes",
     "Estado",
     "num",
+    MANUAL_SELECTION_COLUMN,
 ]
 ORACLE_FLOAT = FLOAT(binary_precision=126)
 
@@ -159,6 +162,56 @@ def filter_pending_by_size(
 
 def get_to_sql_chunksize() -> int:
     return int(os.getenv("DETECCIONES_SEMA_TO_SQL_CHUNKSIZE", "5000"))
+
+
+def get_transaction_retention_days() -> int:
+    raw_value = os.getenv("DETECCIONES_SEMA_RETENTION_DAYS", "7").strip()
+    try:
+        retention_days = int(raw_value)
+    except ValueError as exc:
+        raise ConfigurationError(
+            "DETECCIONES_SEMA_RETENTION_DAYS debe ser un entero valido"
+        ) from exc
+    if retention_days < 0:
+        raise ConfigurationError(
+            "DETECCIONES_SEMA_RETENTION_DAYS no puede ser negativo"
+        )
+    return retention_days
+
+
+def get_transaction_retention_tables() -> list[str]:
+    default_tables = "det_resum_sema_15m,det_resum_sema_hora,det_app_sema"
+    raw_value = os.getenv("DETECCIONES_SEMA_RETENTION_TABLES", default_tables)
+    tables = [table.strip() for table in raw_value.split(",") if table.strip()]
+    if not tables:
+        raise ConfigurationError(
+            "DETECCIONES_SEMA_RETENTION_TABLES debe incluir al menos una tabla"
+        )
+    invalid_tables = [table for table in tables if not re.fullmatch(r"[A-Za-z0-9_]+", table)]
+    if invalid_tables:
+        raise ConfigurationError(
+            "DETECCIONES_SEMA_RETENTION_TABLES contiene nombres invalidos: "
+            + ", ".join(invalid_tables)
+        )
+    return tables
+
+
+def purge_transaction_tables(engine, table_names: list[str], retention_days: int) -> None:
+    cutoff_label = (datetime.now() - timedelta(days=retention_days)).strftime("%d/%m/%y")
+    with engine.begin() as connection:
+        for table_name in table_names:
+            stmt = text(
+                f'DELETE FROM {table_name.upper()} '
+                f'WHERE "Tiempo" < (TRUNC(CURRENT_DATE) - INTERVAL \'{retention_days}\' DAY)'
+            )
+            connection.execute(stmt)
+    logger.info(
+        "Se borraron de las tablas transaccionales (%s) fechas menores a %s "
+        "Detecciones - Sema | retencion_dias=%s",
+        ", ".join(table_names),
+        cutoff_label,
+        retention_days,
+    )
 
 
 def ensure_required_columns(registro: pd.DataFrame) -> pd.DataFrame:
@@ -400,15 +453,19 @@ def sync_registry_by_name(registro_df: pd.DataFrame, drive_df: pd.DataFrame) -> 
     return classified_df.reset_index(drop=True), stats
 
 
-def build_processable_pending_preview(registro_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Timestamp | None]:
-    df = filter_processable_registry_scope(registro_df)
-    df["Estado"] = df["Estado"].astype(str)
-    pending = df[df["Estado"].str.lower() == "pendiente"].copy()
-    processed = df[df["Estado"].str.lower() == "procesado"].copy()
-    max_processed_date = processed["date"].max()
-    if pd.notna(max_processed_date):
-        pending = pending[pending["date"] > max_processed_date]
-    return pending.sort_values(by="date", ascending=False, na_position="last"), max_processed_date
+def build_processable_pending_preview(
+    registro_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.Timestamp | None, pd.DataFrame]:
+    min_size_mb, max_size_mb, target_size_mb = get_size_rules()
+    pending, max_processed_date, excluded_by_size = select_processable_pending_rows(
+        filter_processable_registry_scope(registro_df),
+        min_size_mb=min_size_mb,
+        max_size_mb=max_size_mb,
+        target_size_mb=target_size_mb,
+    )
+    return pending.sort_values(by="date", ascending=False, na_position="last"), max_processed_date, (
+        excluded_by_size.sort_values(by="date", ascending=False, na_position="last")
+    )
 
 
 def apply_processed_updates(registro_df: pd.DataFrame, processed_updates: pd.DataFrame) -> pd.DataFrame:
@@ -430,6 +487,7 @@ def apply_processed_updates(registro_df: pd.DataFrame, processed_updates: pd.Dat
     registro_df.loc[common_keys, "id"] = registro_df.loc[common_keys, "_name_key"].map(
         updates_map["id"]
     )
+    registro_df.loc[common_keys, MANUAL_SELECTION_COLUMN] = ""
 
     registro_df = registro_df.drop(columns=["_name_key"], errors="ignore")
     return dedupe_registry_by_name(registro_df)
@@ -438,11 +496,12 @@ def apply_processed_updates(registro_df: pd.DataFrame, processed_updates: pd.Dat
 def write_det_reg_table(engine, registro_df: pd.DataFrame, dtype_reg: dict) -> None:
     """Evita perder la tabla por fallos de `replace`."""
     table_name = "det_reg_sema"
+    oracle_columns = [column for column in dtype_reg if column in registro_df.columns]
     try:
         if inspect(engine).has_table(table_name):
             with engine.begin() as connection:
                 connection.execute(text("TRUNCATE TABLE det_reg_sema"))
-        registro_df.to_sql(
+        registro_df[oracle_columns].to_sql(
             name=table_name,
             con=engine,
             if_exists="append",
@@ -494,36 +553,16 @@ def main() -> None:
             sync_stats.unchanged_rows,
         )
 
-    processable_pending, cutoff_date = build_processable_pending_preview(Registro)
+    processable_pending, cutoff_date, excluded_by_size = build_processable_pending_preview(Registro)
     logger.info(
         "Pendientes potenciales segun criterio pipeline: total=%s cutoff_procesado=%s",
         len(processable_pending),
         cutoff_date.isoformat() if pd.notna(cutoff_date) else "None",
     )
     min_size_mb, max_size_mb, target_size_mb = get_size_rules()
-
-    cleared_df = drive_df.copy()
-    cleared_df = cleared_df.sort_values(by=["date"], ascending=False)
-    cleared_df = cleared_df[cleared_df["type_of_file"] == "text/csv"]
-    cleared_df = cleared_df[is_processable_detecciones_name(cleared_df["name"])]
-    cleared_df = pd.merge(
-        cleared_df, Registro[["id", "Estado"]], left_on="id", right_on="id", how="left"
-    ).fillna("Pendiente")
-
-    select_data = cleared_df[cleared_df["Estado"] == "Pendiente"]
-
-    processed_data = cleared_df[cleared_df["Estado"] == "Procesado"].copy()
-    processed_data["date"] = pd.to_datetime(processed_data["date"])
-    max_date = processed_data["date"].max()
+    select_data = processable_pending.copy()
+    max_date = cutoff_date
     max_staleness_days = int(os.getenv("DETECCIONES_SEMA_MAX_STALENESS_DAYS", "1"))
-    if pd.notna(max_date):
-        select_data = select_data[select_data["date"] > max_date]
-
-    select_data, excluded_by_size = filter_pending_by_size(
-        select_data,
-        min_size_mb=min_size_mb,
-        max_size_mb=max_size_mb,
-    )
     if not excluded_by_size.empty:
         logger.warning(
             "Se excluyeron %s pendientes por tamano fuera de rango (%s MB a %s MB).",
@@ -531,15 +570,6 @@ def main() -> None:
             min_size_mb,
             max_size_mb,
         )
-    if not select_data.empty:
-        select_data["size_gap_mb"] = (
-            pd.to_numeric(select_data["size_in_MB"], errors="coerce") - target_size_mb
-        ).abs()
-        select_data = select_data.sort_values(
-            by=["date", "size_gap_mb", "last_modification"],
-            ascending=[False, True, False],
-            na_position="last",
-        ).drop(columns=["size_gap_mb"])
 
     MESES = select_data["mes"].unique().tolist()
     ids = select_data["id"].tolist()
@@ -812,6 +842,30 @@ def main() -> None:
         df_resum = df_resum.reset_index()
         df_resum = df_resum.drop(["Nombre", "index"], axis=1)
 
+        # Estimación Base de Datos App transaccional
+        df_det_app = df_mes.copy()
+        df_det_app = df_det_app.set_index(df_det_app["Tiempo"]).drop(["Tiempo"], axis=1)
+        df_det_app = np.round(
+            df_det_app.groupby(["Tiempo", "EXT", "Acceso"]).agg(
+                Num_deteccion=("Num_deteccion", "sum"),
+                Deteccion=("Deteccion", "sum"),
+                Ocupacion=("Ocupacion", "mean"),
+                Brecha=("Brecha", "mean"),
+                Velocidad=("Velocidad", "mean"),
+            ),
+            3,
+        )
+        df_det_app = df_det_app.reset_index()
+        df_det_app = df_det_app.dropna(subset=["Ocupacion"])
+        df_det_app["Dia_sem"] = (
+            ((df_det_app["Tiempo"].dt.dayofweek) + 1).astype(str)
+        ) + " " + (df_det_app["Tiempo"].dt.day_name())
+        df_det_app["Hora"] = df_det_app["Tiempo"].dt.hour
+        df_det_app["Fecha"] = df_det_app["Tiempo"].dt.date
+        df_det_app = df_det_app.rename(columns={"EXT": "ext"})
+        df_det_app = df_det_app.set_index(df_det_app["Tiempo"]).drop(["Tiempo"], axis=1)
+        df_det_app = df_det_app.reset_index()
+
         # EstimaciÃ³n Base de Datos Hora transaccional
         df_hora = df_mes.copy()
         df_hora = df_hora.set_index(df_hora["Tiempo"]).drop(["Tiempo"], axis=1)
@@ -916,6 +970,29 @@ def main() -> None:
             chunksize=to_sql_chunksize,
         )
 
+        # Actualización base de Datos App transaccional
+        dtype_app = {
+            "Tiempo": TIMESTAMP,
+            "ext": VARCHAR2(50),
+            "Acceso": VARCHAR2(50),
+            "Num_deteccion": NUMBER,
+            "Deteccion": NUMBER,
+            "Ocupacion": ORACLE_FLOAT,
+            "Brecha": ORACLE_FLOAT,
+            "Velocidad": ORACLE_FLOAT,
+            "Dia_sem": VARCHAR2(20),
+            "Hora": NUMBER,
+            "Fecha": TIMESTAMP,
+        }
+        df_det_app.to_sql(
+            name="det_app_sema",
+            con=engine,
+            if_exists="append",
+            index=False,
+            dtype=dtype_app,
+            chunksize=to_sql_chunksize,
+        )
+
         # ActualizaciÃ³n base de Datos Hora transaccional
         dtype_resum_hora = {
             "Tiempo": TIMESTAMP,
@@ -983,24 +1060,9 @@ def main() -> None:
     )
 
     # BORRAR REGISTROS TRANSACCIONALES ANTIGUOS
-    now = datetime.now()
-    day1 = (now - timedelta(days=20)).strftime("%d/%m/%y")
-
-    stmt1 = text(
-        """DELETE FROM DET_RESUM_SEMA_15M WHERE \"Tiempo\" < (TRUNC(CURRENT_DATE) - INTERVAL '20' DAY)"""
-    )
-    stmt2 = text(
-        """DELETE FROM DET_RESUM_SEMA_HORA WHERE \"Tiempo\" < (TRUNC(CURRENT_DATE) - INTERVAL '20' DAY)"""
-    )
-
-    with engine.connect() as connection:
-        connection.execute(stmt1)
-        connection.execute(stmt2)
-        connection.commit()
-        logger.info(
-            "Se borraron de las tablas transaccionales fechas menores a %s Detecciones - Sema",
-            day1,
-        )
+    retention_days = get_transaction_retention_days()
+    retention_tables = get_transaction_retention_tables()
+    purge_transaction_tables(engine, retention_tables, retention_days)
 
 
 if __name__ == "__main__":

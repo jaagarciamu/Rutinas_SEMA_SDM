@@ -399,6 +399,204 @@ def ensure_recent_updates(registro_df: pd.DataFrame, max_staleness_hours: int) -
         )
 
 
+def get_planes_app_lookback_days() -> int:
+    return int(os.getenv("PLANES_APP_LOOKBACK_DAYS", "7"))
+
+
+def load_recent_plan_history_for_app(
+    engine,
+    lookback_days: int,
+    now: datetime,
+) -> pd.DataFrame:
+    day_base = (now - timedelta(days=lookback_days)).strftime("%d/%m/%y")
+    day_fin = (now + timedelta(days=1)).strftime("%d/%m/%y")
+    query = (
+        'SELECT * FROM PLAN_HIST_SEMA WHERE "Tiempo" >= TO_DATE(:day_base, \'DD/MM/RR\') '
+        'AND "Tiempo" <= TO_DATE(:day_fin, \'DD/MM/RR\')'
+    )
+    return pd.read_sql(query, engine, params={"day_base": day_base, "day_fin": day_fin})
+
+
+def build_plan_app_dataframe(hist_df: pd.DataFrame, now: datetime, lookback_days: int) -> pd.DataFrame:
+    hist = hist_df.copy()
+    if hist.empty:
+        raise DataAvailabilityError("No hay historico reciente disponible para construir plan_app_sema")
+
+    hist["Tiempo"] = pd.to_datetime(hist["Tiempo"], errors="coerce")
+    hist["Externo"] = pd.to_numeric(hist["Externo"], errors="coerce")
+    hist["Plan_ingresa"] = pd.to_numeric(hist["Plan_ingresa"], errors="coerce")
+    hist["Plan_finaliza"] = pd.to_numeric(hist["Plan_finaliza"], errors="coerce")
+    hist["Referencia"] = pd.to_numeric(hist["Referencia"], errors="coerce")
+    hist = hist.dropna(subset=["Tiempo", "Externo", "Plan_ingresa", "Plan_finaliza", "Referencia"])
+    if hist.empty:
+        raise DataAvailabilityError(
+            "El historico reciente de PLAN_HIST_SEMA no tiene filas validas para construir plan_app_sema"
+        )
+
+    ahora = pd.Timestamp(now).floor("s")
+    hoy = ahora.normalize()
+    day1 = (pd.Timestamp(now) - timedelta(days=lookback_days)).strftime("%d/%m/%y")
+    lista_ext = sorted(hist["Externo"].dropna().unique())
+    lista_ext = [np.int64(x) for x in lista_ext]
+
+    data: list[pd.DataFrame] = []
+
+    for ext in lista_ext:
+        planes_sel = hist[hist["Externo"] == ext].sort_values(
+            by=["Referencia"],
+            ascending=False,
+        )
+        if planes_sel.empty:
+            continue
+
+        nuevo = planes_sel[["Referencia", "Externo", "Plan_ingresa", "Tiempo"]].reset_index(drop=True)
+        inicio = pd.DataFrame(
+            {
+                "fecha_inicio": nuevo["Tiempo"].dt.date,
+                "hora_inicio": nuevo["Tiempo"].dt.time,
+            }
+        )
+        nuevo = pd.concat([nuevo, inicio], axis=1)
+
+        ultima_fecha = planes_sel.iloc[0]["Tiempo"].normalize()
+        if ultima_fecha == hoy:
+            tiempo_fin = ahora
+        else:
+            tiempo_fin = (
+                planes_sel.iloc[0]["Tiempo"].to_period("D").to_timestamp(how="end").round("1s")
+                - timedelta(seconds=1)
+            )
+
+        add = pd.DataFrame(
+            {
+                "Plan_finaliza": [planes_sel.iloc[0]["Plan_ingresa"]],
+                "Tiempo": [tiempo_fin],
+            }
+        )
+
+        movido = planes_sel[["Plan_finaliza", "Tiempo"]]
+        prueba = (
+            pd.concat([add, movido], ignore_index=True)
+            .set_axis(["Plan_finaliza", "Tiempo_finaliza"], axis=1)[:-1]
+        )
+
+        tiempos = pd.DataFrame(
+            {
+                "fecha_finaliza": prueba["Tiempo_finaliza"].dt.date,
+                "hora_finaliza": prueba["Tiempo_finaliza"].dt.time,
+            }
+        )
+        prueba = pd.concat([prueba, tiempos], axis=1)
+
+        union = pd.concat([nuevo, prueba], axis=1)
+        union["plan_Final"] = np.where(
+            union["Plan_ingresa"] == union["Plan_finaliza"],
+            union["Plan_ingresa"],
+            0,
+        )
+
+        temp_df = []
+        for row in union.itertuples(index=False):
+            if row.fecha_inicio != row.fecha_finaliza:
+                lista1 = list(row)
+                lista1[8] = lista1[4]
+                lista1[9] = "23:59:59"
+                temp_df.append(lista1)
+
+                lista2 = list(row)
+                lista2[4] = lista2[8]
+                lista2[5] = "00:00:01"
+                temp_df.append(lista2)
+            else:
+                temp_df.append(list(row))
+
+        df_planes = pd.DataFrame(temp_df, columns=union.columns)
+        if df_planes.empty:
+            continue
+
+        df_planes["fecha_inicio"] = pd.to_datetime(df_planes["fecha_inicio"])
+        df_planes["hora_inicio"] = pd.to_datetime(df_planes["hora_inicio"], format="%H:%M:%S")
+        df_planes["fecha_finaliza"] = pd.to_datetime(df_planes["fecha_finaliza"])
+        df_planes["hora_finaliza"] = pd.to_datetime(df_planes["hora_finaliza"], format="%H:%M:%S")
+        df_planes["duracion"] = (
+            pd.Timestamp("now").normalize() + (df_planes["hora_finaliza"] - df_planes["hora_inicio"])
+        ).dt.time
+
+        df_planes = df_planes[
+            df_planes["fecha_inicio"] >= pd.to_datetime(day1, format="%d/%m/%y")
+        ]
+        data.append(df_planes)
+
+    planes_ord = pd.concat(data, axis=0).reset_index(drop=True) if data else pd.DataFrame()
+    if planes_ord.empty:
+        raise DataAvailabilityError("No fue posible construir filas para plan_app_sema")
+
+    text_columns = [
+        "Referencia",
+        "Externo",
+        "Plan_ingresa",
+        "Plan_finaliza",
+        "plan_Final",
+    ]
+    for column in text_columns:
+        planes_ord[column] = planes_ord[column].astype(str)
+
+    datetime_columns = [
+        "Tiempo",
+        "fecha_inicio",
+        "hora_inicio",
+        "Tiempo_finaliza",
+        "fecha_finaliza",
+        "hora_finaliza",
+    ]
+    for column in datetime_columns:
+        planes_ord[column] = pd.to_datetime(planes_ord[column], errors="coerce")
+
+    planes_ord["duracion"] = planes_ord["duracion"].astype(str)
+
+    return planes_ord[
+        [
+            "Referencia",
+            "Externo",
+            "Plan_ingresa",
+            "Tiempo",
+            "fecha_inicio",
+            "hora_inicio",
+            "Plan_finaliza",
+            "Tiempo_finaliza",
+            "fecha_finaliza",
+            "hora_finaliza",
+            "plan_Final",
+            "duracion",
+        ]
+    ]
+
+
+def write_plan_app_table(engine, dataframe: pd.DataFrame) -> None:
+    dtype_app = {
+        "Referencia": VARCHAR2(50),
+        "Externo": VARCHAR2(50),
+        "Plan_ingresa": VARCHAR2(50),
+        "Tiempo": TIMESTAMP,
+        "fecha_inicio": TIMESTAMP,
+        "hora_inicio": TIMESTAMP,
+        "Plan_finaliza": VARCHAR2(50),
+        "Tiempo_finaliza": TIMESTAMP,
+        "fecha_finaliza": TIMESTAMP,
+        "hora_finaliza": TIMESTAMP,
+        "plan_Final": VARCHAR2(50),
+        "duracion": VARCHAR2(50),
+    }
+    dataframe.to_sql(
+        name="plan_app_sema",
+        con=engine,
+        if_exists="replace",
+        index=False,
+        dtype=dtype_app,
+        chunksize=5000,
+    )
+
+
 def main() -> None:
     load_environment()
     setup_logging()
@@ -600,6 +798,24 @@ def main() -> None:
         )
     else:
         logger.info("Actualizacion SUANET-SGM deshabilitada por configuracion")
+
+    app_lookback_days = get_planes_app_lookback_days()
+    app_hist_df = load_recent_plan_history_for_app(
+        main_engine,
+        lookback_days=app_lookback_days,
+        now=datetime.now(),
+    )
+    plan_app_df = build_plan_app_dataframe(
+        app_hist_df,
+        now=datetime.now(),
+        lookback_days=app_lookback_days,
+    )
+    write_plan_app_table(main_engine, plan_app_df)
+    logger.info(
+        "Tabla plan_app_sema actualizada filas=%s ventana_dias=%s",
+        len(plan_app_df),
+        app_lookback_days,
+    )
 
     logger.info("Se actualizan %s registro(s) de planes - SEMA", len(ids))
     if failed_ids:
