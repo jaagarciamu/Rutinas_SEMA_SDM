@@ -1,1 +1,0 @@
-"""Mapas principales del dashboard."""
