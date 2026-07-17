@@ -9,7 +9,7 @@ pipelines:
   - id: "02_DETECCIONES_30MIN"
     script: "pipelines/02_DETECCIONES_30MIN.py"
     interval_minutes: 30
-    offset_minutes: 20
+    offset_minutes: 0
     start_time: "04:00"
     end_time: "23:55"
     enabled: true
@@ -46,7 +46,7 @@ pipelines:
 
   - id: "07_KPI_SEMA.py"
     script: "pipelines/07_KPI_SEMA.py"
-    interval_minutes: 720
+    interval_minutes: 1440
     offset_minutes: 90
     enabled: true
     args: []
